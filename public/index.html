@@ -44,6 +44,40 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 16px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .clear-button {
+            padding: 6px 14px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .clear-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-1px);
+        }
+
+        .clear-button:active {
+            transform: translateY(0);
+        }
+
+        .clear-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
         }
 
         .connection-status {
@@ -310,9 +344,12 @@
     <div class="chat-container">
         <div class="chat-header">
             <span>AI Chat Room</span>
-            <div class="connection-status">
-                <span class="status-dot" id="statusDot"></span>
-                <span id="statusText">Connecting...</span>
+            <div class="header-actions">
+                <button id="clearButton" class="clear-button" disabled>🗑️ Clear Chat</button>
+                <div class="connection-status">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">Connecting...</span>
+                </div>
             </div>
         </div>
 
@@ -359,6 +396,7 @@
         const messageInput = document.getElementById('messageInput');
         const usernameInput = document.getElementById('usernameInput');
         const sendButton = document.getElementById('sendButton');
+        const clearButton = document.getElementById('clearButton');
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
         const errorBanner = document.getElementById('errorBanner');
@@ -385,6 +423,7 @@
                     statusText.textContent = 'Connected';
                     messageInput.disabled = false;
                     sendButton.disabled = false;
+                    clearButton.disabled = false;
                     reconnectAttempts = 0;
                     hideError();
                 };
@@ -404,6 +443,7 @@
                     statusText.textContent = 'Disconnected';
                     messageInput.disabled = true;
                     sendButton.disabled = true;
+                    clearButton.disabled = true;
 
                     // Attempt to reconnect
                     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
@@ -456,6 +496,11 @@
                 case 'ai_error':
                     // AI error
                     displayAIError(data.messageId, data.message);
+                    break;
+
+                case 'history_cleared':
+                    // History was cleared
+                    clearMessagesUI();
                     break;
 
                 case 'error':
@@ -569,6 +614,21 @@
             messageInput.focus();
         }
 
+        // Clear chat history
+        function clearChat() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            
+            if (confirm('Are you sure you want to clear the chat history? This will delete all messages for everyone.')) {
+                ws.send(JSON.stringify({ type: 'clear_history' }));
+            }
+        }
+
+        // Clear messages from UI
+        function clearMessagesUI() {
+            messagesContainer.innerHTML = '';
+            aiMessages.clear();
+        }
+
         // Scroll to bottom
         function scrollToBottom() {
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -595,6 +655,7 @@
 
         // Event listeners
         sendButton.addEventListener('click', sendMessage);
+        clearButton.addEventListener('click', clearChat);
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendMessage();
         });
