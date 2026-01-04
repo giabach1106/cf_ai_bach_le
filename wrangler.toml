@@ -23,6 +23,13 @@ new_sqlite_classes = ["ChatRoom"]
 # Workers AI Binding
 [ai]
 binding = "AI"
+remote = true
+
+# Vectorize Binding for RAG
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "chat-index"
+remote = true
 
 # Static Assets Configuration
 [assets]

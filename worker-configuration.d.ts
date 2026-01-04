@@ -9,6 +9,7 @@ declare namespace Cloudflare {
 	interface Env {
 		CHAT_ROOM: DurableObjectNamespace /* ChatRoom from main */;
 		AI: Ai;
+		VECTORIZE: VectorizeIndex;
 		ASSETS: Fetcher;
 	}
 }
