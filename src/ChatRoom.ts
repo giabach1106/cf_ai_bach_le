@@ -27,10 +27,23 @@ export class ChatRoom extends DurableObject {
 	private sessions: Set<Session>;
 	// Storage key for message history
 	private readonly HISTORY_KEY = 'message_history';
+	// Room ID for vector isolation (extracted from URL)
+	private roomId: string = 'default';
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		this.sessions = new Set();
+	}
+
+	/**
+	 * Generates a short vector ID for Vectorize (max 64 bytes)
+	 * Uses first 8 chars of room ID + first 8 chars of message ID = 17 chars
+	 */
+	private getVectorId(messageId: string): string {
+		// Shorten to fit Vectorize's 64 byte limit
+		const shortRoom = this.roomId.substring(0, 8);
+		const shortMsg = messageId.substring(0, 8);
+		return `${shortRoom}_${shortMsg}`;
 	}
 
 	/**
@@ -43,9 +56,9 @@ export class ChatRoom extends DurableObject {
 			return new Response('Expected WebSocket upgrade', { status: 426 });
 		}
 
-		// Extract username from query parameters
+		// Extract room ID from query parameters for vector isolation
 		const url = new URL(request.url);
-		const username = url.searchParams.get('username') || 'Anonymous';
+		this.roomId = url.searchParams.get('room') || 'default';
 
 		// Create WebSocket pair
 		const pair = new WebSocketPair();
@@ -54,10 +67,10 @@ export class ChatRoom extends DurableObject {
 		// Accept the WebSocket connection
 		server.accept();
 
-		// Create session object
+		// Create session object (username is always "User" now)
 		const session: Session = {
 			webSocket: server,
-			username: username,
+			username: 'User',
 		};
 
 		// Add session to active sessions
@@ -78,15 +91,6 @@ export class ChatRoom extends DurableObject {
 
 		// Send message history to newly connected user
 		await this.sendHistory(session);
-
-		// Notify other users about new connection
-		const joinMessage: ChatMessage = {
-			id: crypto.randomUUID(),
-			username: 'System',
-			content: `${username} joined the chat`,
-			timestamp: Date.now(),
-		};
-		await this.broadcastMessage(joinMessage, session);
 
 		// Return the client WebSocket to complete the upgrade
 		return new Response(null, {
@@ -131,10 +135,10 @@ export class ChatRoom extends DurableObject {
 				return;
 			}
 
-		// Create chat message
+		// Create chat message (username is always "User" for simplicity)
 		const message: ChatMessage = {
 			id: crypto.randomUUID(),
-			username: session.username,
+			username: 'User',
 			content: data.content || '',
 			timestamp: Date.now(),
 		};
@@ -240,21 +244,32 @@ export class ChatRoom extends DurableObject {
 				}
 			}
 
-			// RAG: Retrieve relevant context from Vectorize
+			// RAG: Retrieve relevant context from Vectorize AND recent DO storage
 			let contextString = '';
 			let foundContextCount = 0;
 			let debugInfo: string[] = [];
 			let ragFailed = false;
+			
+			// FIRST: Get recent messages from DO storage (immediate context, no eventual consistency)
+			const recentHistory = await this.getHistory();
+			const recentMessages = recentHistory
+				.filter(msg => msg.username !== 'AI Assistant' && msg.username !== 'System')
+				.slice(-10) // Last 10 user messages
+				.map(msg => `${msg.username}: ${msg.content}`)
+				.filter(content => content.toLowerCase() !== `user: ${prompt.toLowerCase()}`); // Exclude current message
+			
+			console.log(`[RAG] Found ${recentMessages.length} recent messages in DO storage`);
+			debugInfo.push(`📋 Recent messages from storage: ${recentMessages.length}`);
 			
 			try {
 				debugInfo.push(`🔍 Generating embedding for: "${prompt.substring(0, 30)}..."`);
 				
 				// Generate embedding for the user's prompt
 				const promptEmbedding = await this.generateEmbedding(prompt);
-				console.log(`[RAG] Generated embedding for prompt: "${prompt.substring(0, 50)}..."`);
+				console.log(`[RAG] Generated embedding for prompt [room: ${this.roomId}]: "${prompt.substring(0, 50)}..."`);
 				debugInfo.push(`✓ Embedding generated (${promptEmbedding.length} dimensions)`);
 
-				// Query Vectorize for top 5 most similar messages (with retry)
+				// Query Vectorize for top 5 most similar messages (filtered by room ID)
 				debugInfo.push(`🔎 Querying Vectorize for similar messages...`);
 				let searchResults;
 				let queryAttempts = 0;
@@ -266,6 +281,7 @@ export class ChatRoom extends DurableObject {
 							topK: 5,
 							returnValues: false,
 							returnMetadata: 'all',
+							filter: { roomId: this.roomId }, // Filter by room ID for isolation
 						});
 						break; // Success, exit retry loop
 					} catch (queryError) {
@@ -282,7 +298,7 @@ export class ChatRoom extends DurableObject {
 				}
 
 				if (searchResults) {
-					console.log(`[RAG] Vectorize query returned ${searchResults.matches?.length || 0} matches`);
+					console.log(`[RAG] Vectorize query returned ${searchResults.matches?.length || 0} matches for room: ${this.roomId}`);
 					debugInfo.push(`✓ Found ${searchResults.matches?.length || 0} potential matches`);
 
 					// Extract context from matching vectors
@@ -291,11 +307,10 @@ export class ChatRoom extends DurableObject {
 							.filter((match) => match.score && match.score > 0.5) // Filter by similarity score
 							.map((match) => {
 								const content = match.metadata?.content as string;
-								const username = match.metadata?.username as string;
 								const score = match.score?.toFixed(3);
-								console.log(`[RAG] Match (score: ${score}): ${username}: ${content?.substring(0, 50)}...`);
-								debugInfo.push(`  📝 Match (${score}): ${username}: "${content?.substring(0, 40)}..."`);
-								return `${username}: ${content}`;
+								console.log(`[RAG] Match (score: ${score}): ${content?.substring(0, 50)}...`);
+								debugInfo.push(`  📝 Match (${score}): "${content?.substring(0, 40)}..."`);
+								return content;
 							})
 							.filter(Boolean);
 
@@ -351,12 +366,30 @@ export class ChatRoom extends DurableObject {
 				}
 			}
 
-			// Build system message with optional context
+			// Build system message with context from both sources
 			let systemMessage = 'You are a helpful AI assistant in a chat room. Be concise, natural, and friendly.';
 			
-			// Only add context if we actually found relevant information
+			// Combine recent messages (from DO storage) with Vectorize results
+			const allContext: string[] = [];
+			
+			// Add recent messages from DO storage (always available, no eventual consistency)
+			if (recentMessages.length > 0) {
+				allContext.push(...recentMessages);
+				console.log(`[RAG] Added ${recentMessages.length} recent messages from DO storage to context`);
+			}
+			
+			// Add Vectorize results if available
 			if (contextString) {
+				// contextString already contains formatted context from Vectorize
 				systemMessage += contextString;
+			}
+			
+			// If we have recent messages but no Vectorize results, use recent messages as context
+			if (allContext.length > 0 && !contextString) {
+				systemMessage += '\n\n[Recent conversation context]:\n' + 
+					allContext.map(msg => `- ${msg}`).join('\n');
+				console.log(`[RAG] Using ${allContext.length} recent messages as context (Vectorize had no results)`);
+				debugInfo.push(`✅ Using ${allContext.length} recent messages from storage as context`);
 			}
 
 			// Call Workers AI with Llama 3.3 model with streaming enabled
@@ -515,6 +548,7 @@ export class ChatRoom extends DurableObject {
 
 	/**
 	 * Stores message embedding in Vectorize (non-blocking background operation)
+	 * Uses room-prefixed vector IDs for isolation between rooms
 	 * Retries on failure to handle transient Cloudflare service issues
 	 */
 	private async storeMessageEmbedding(message: ChatMessage, maxRetries = 2): Promise<void> {
@@ -529,7 +563,9 @@ export class ChatRoom extends DurableObject {
 			return;
 		}
 		
-		console.log(`[RAG] Storing message in Vectorize: ${message.username}: "${contentToStore.substring(0, 50)}..."`);
+		// Use room-prefixed vector ID for isolation
+		const vectorId = this.getVectorId(message.id);
+		console.log(`[RAG] Storing message in Vectorize [room: ${this.roomId}]: "${contentToStore.substring(0, 50)}..."`);
 		
 		for (let attempt = 1; attempt <= maxRetries; attempt++) {
 			try {
@@ -539,8 +575,8 @@ export class ChatRoom extends DurableObject {
 
 				// Track this vector ID for complete cleanup later
 				const allVectorIds = await this.ctx.storage.get<string[]>('all_vector_ids') || [];
-				if (!allVectorIds.includes(message.id)) {
-					allVectorIds.push(message.id);
+				if (!allVectorIds.includes(vectorId)) {
+					allVectorIds.push(vectorId);
 					// Keep only last 200 IDs to prevent unbounded growth
 					const trimmedIds = allVectorIds.slice(-200);
 					await this.ctx.storage.put('all_vector_ids', trimmedIds);
@@ -554,17 +590,17 @@ export class ChatRoom extends DurableObject {
 					try {
 						await this.env.VECTORIZE.upsert([
 							{
-								id: message.id,
+								id: vectorId, // Room-prefixed ID
 								values: embedding,
 								metadata: {
 									content: contentToStore,
-									username: message.username,
+									roomId: this.roomId, // Store room ID for filtering
 									timestamp: message.timestamp,
 								},
 							},
 						]);
 						
-						console.log(`[RAG] ✓ Successfully stored message with ID: ${message.id}`);
+						console.log(`[RAG] ✓ Successfully stored vector: ${vectorId}`);
 						return; // Success - exit function
 					} catch (upsertError) {
 						upsertAttempts++;
@@ -616,53 +652,119 @@ export class ChatRoom extends DurableObject {
 
 	/**
 	 * Clears all message history from storage and Vectorize
+	 * Only deletes vectors belonging to this room (filtered by roomId)
 	 */
 	private async clearHistory(): Promise<void> {
-		// Get all message IDs before clearing
+		console.log(`[RAG] Starting cleanup for room: ${this.roomId}...`);
+
+		// Notify clients that cleanup is starting
+		this.broadcastCleanupProgress('starting', 0, 'Starting cleanup...');
+
+		// Step 1: Collect vector IDs from tracked storage (room-prefixed)
+		const trackedIds = await this.ctx.storage.get<string[]>('all_vector_ids') || [];
 		const history = await this.getHistory();
-		const vectorIds = history.map((msg) => msg.id);
-
-		console.log(`[RAG] Clearing ${vectorIds.length} vectors from Vectorize...`);
-
-		// Also track ALL vector IDs we've ever created (to handle vectors outside current history)
-		const allVectorIds = await this.ctx.storage.get<string[]>('all_vector_ids') || [];
-		console.log(`[RAG] Total tracked vector IDs: ${allVectorIds.length}`);
-
-		// Combine both sets of IDs (history + tracked)
-		const idsToDelete = [...new Set([...vectorIds, ...allVectorIds])];
+		const historyIds = history.map(msg => this.getVectorId(msg.id));
 		
-		console.log(`[RAG] Deleting ${idsToDelete.length} total vectors...`);
+		// Combine all known IDs for this room
+		const allIds = new Set<string>();
+		trackedIds.forEach(id => allIds.add(id));
+		historyIds.forEach(id => allIds.add(id));
+		
+		// Filter out IDs that are too long (legacy IDs from before the fix)
+		// Vectorize max ID length is 64 bytes
+		const validIds = Array.from(allIds).filter(id => {
+			const byteLength = new TextEncoder().encode(id).length;
+			if (byteLength > 64) {
+				console.log(`[RAG] Skipping invalid ID (${byteLength} bytes): ${id.substring(0, 20)}...`);
+				return false;
+			}
+			return true;
+		});
+		
+		this.broadcastCleanupProgress('collecting', 20, `Found ${validIds.length} vectors...`);
+		console.log(`[RAG] Found ${validIds.length} valid tracked vectors for room: ${this.roomId}`);
 
-		// Delete all vectors from Vectorize index first (with retry)
+		// Step 2: Also query Vectorize with roomId filter to find any untracked vectors
+		try {
+			const queryVector = Array.from({ length: 768 }, () => Math.random() * 0.01);
+			const queryResult = await this.env.VECTORIZE.query(queryVector, {
+				topK: 50, // Max 50 when using returnMetadata: 'all'
+				returnValues: false,
+				returnMetadata: 'all',
+				filter: { roomId: this.roomId },
+			});
+
+			const foundIds = queryResult.matches?.map(m => m.id) || [];
+			foundIds.forEach(id => {
+				if (new TextEncoder().encode(id).length <= 64) {
+					allIds.add(id);
+				}
+			});
+			console.log(`[RAG] Query found ${foundIds.length} additional vectors for this room`);
+		} catch (error) {
+			console.log(`[RAG] Could not query for additional vectors:`, error);
+		}
+
+		// Re-filter to get only valid IDs
+		const idsToDelete = Array.from(allIds).filter(id => new TextEncoder().encode(id).length <= 64);
+		console.log(`[RAG] Total vectors to delete for room ${this.roomId}: ${idsToDelete.length}`);
+
+		// Step 3: Delete all vectors for this room
 		if (idsToDelete.length > 0) {
-			let deleteAttempts = 0;
-			const maxDeleteAttempts = 3;
+			this.broadcastCleanupProgress('deleting', 50, `Deleting ${idsToDelete.length} vectors...`);
 			
-			while (deleteAttempts < maxDeleteAttempts) {
+			let deleteSuccess = false;
+			for (let attempt = 1; attempt <= 3; attempt++) {
 				try {
 					await this.env.VECTORIZE.deleteByIds(idsToDelete);
 					console.log(`[RAG] ✓ Successfully deleted ${idsToDelete.length} vectors`);
+					deleteSuccess = true;
 					break;
 				} catch (error) {
-					deleteAttempts++;
-					console.error(`[RAG] Error deleting vectors (attempt ${deleteAttempts}/${maxDeleteAttempts}):`, error);
-					
-					if (deleteAttempts >= maxDeleteAttempts) {
-						console.error('[RAG] Failed to delete vectors after all retries');
-						// Continue anyway - don't block history clearing
-					} else {
-						// Wait before retry (exponential backoff)
-						await new Promise(resolve => setTimeout(resolve, 1000 * deleteAttempts));
+					console.error(`[RAG] Delete attempt ${attempt}/3 failed:`, error);
+					if (attempt < 3) {
+						await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
 					}
 				}
 			}
+
+			if (!deleteSuccess) {
+				console.error('[RAG] Failed to delete vectors after 3 attempts');
+			}
+		} else {
+			console.log(`[RAG] No vectors to delete for this room`);
 		}
 
-		// Clear message history from storage
+		// Step 4: Clear local storage
+		this.broadcastCleanupProgress('verifying', 80, 'Clearing history...');
 		await this.ctx.storage.delete(this.HISTORY_KEY);
-		// Clear tracked vector IDs
 		await this.ctx.storage.delete('all_vector_ids');
-		console.log(`[RAG] ✓ Cleared message history and vector tracking from storage`);
+		
+		// Also wait a brief moment for eventual consistency
+		await new Promise(resolve => setTimeout(resolve, 500));
+		
+		this.broadcastCleanupProgress('complete', 100, 'Cleanup complete!');
+		console.log(`[RAG] ✓ Complete cleanup finished for room: ${this.roomId}`);
+	}
+
+	/**
+	 * Broadcasts cleanup progress to all connected clients
+	 */
+	private broadcastCleanupProgress(status: string, progress: number, message: string): void {
+		const progressUpdate = JSON.stringify({
+			type: 'cleanup_progress',
+			status,
+			progress,
+			message,
+		});
+
+		for (const session of this.sessions) {
+			try {
+				session.webSocket.send(progressUpdate);
+			} catch (error) {
+				console.error('Error sending cleanup progress:', error);
+			}
+		}
 	}
 
 	/**
