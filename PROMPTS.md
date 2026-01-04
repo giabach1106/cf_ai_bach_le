@@ -131,129 +131,34 @@ Now implement the RAG logic in `src/ChatRoom.ts`.
 
 ---
 
-## 🎯 RAG Implementation Results
+1. Clear chat deletes message history but old vectors remain in Vectorize index.
 
-### ✅ Successfully Implemented Features
-
-1. **Vectorize Configuration**
-   - Added `[[vectorize]]` binding in `wrangler.toml` with `remote = true`
-   - Updated `Env` interface to include `VECTORIZE: VectorizeIndex`
-   - Created Vectorize index: `chat-index` (768D, cosine metric)
-
-2. **Embedding Generation**
-   - Implemented `generateEmbedding()` method using `@cf/baai/bge-base-en-v1.5`
-   - Returns 768-dimensional embeddings
-   - Includes text truncation (1000 chars) to prevent oversized inputs
-   - Robust error handling
-
-3. **Message Storage with Embeddings**
-   - Non-blocking background storage using async pattern
-   - Strips `@ai` prefix from commands before storing
-   - Stores metadata: content, username, timestamp
-   - Uses message UUID as vector ID
-
-4. **Context Retrieval (RAG Query)**
-   - Generates query embedding for user prompts
-   - Retrieves top 5 similar messages (increased from 3 for better context)
-   - Filters by similarity threshold (score > 0.5)
-   - Returns ranked results with similarity scores
-
-5. **Enhanced Prompt Engineering**
-   - Injects retrieved context into system prompt
-   - Format: "IMPORTANT - Relevant information from previous messages..."
-   - Explicit instruction for AI to use context
-   - Maintains conversation flow with historical knowledge
-
-6. **Vector Cleanup**
-   - `clearHistory()` now deletes all vectors via `deleteByIds()`
-   - Prevents orphaned embeddings in the index
-   - Maintains consistency between chat history and vector store
-
-### 🐛 Challenges & Solutions
-
-**Challenge 1: Local Development Limitations**
-- Problem: Vectorize binding not supported in local mode
-- Solution: Added `remote = true` to binding configuration
-- Result: RAG works in local dev with remote resources
-
-**Challenge 2: WebSocket Disconnections**
-- Problem: Embedding generation blocked WebSocket operations
-- Solution: Made embedding storage non-blocking (fire-and-forget)
-- Result: No more connection timeouts
-
-**Challenge 3: Duplicate Messages**
-- Problem: Sender received their own messages
-- Solution: Excluded sender session in `broadcastMessage()`
-- Result: Clean message flow
-
-**Challenge 4: Debugging Visibility**
-- Problem: Console logs not visible in Durable Objects (remote mode)
-- Solution: Added debug message system that sends RAG info to chat UI
-- Result: Full visibility into RAG operations (toggle-able)
-
-**Challenge 5: Command Noise in Embeddings**
-- Problem: `@ai` prefix stored in vectors, affecting similarity
-- Solution: Strip command prefix before generating embeddings
-- Result: Cleaner semantic matching
-
-### 📊 Performance Metrics
-
-- **Embedding Generation:** ~500-800ms per message
-- **Vectorize Query:** ~200-400ms per search
-- **Similarity Scores:** Typically 0.70-0.85 for relevant matches
-- **Context Quality:** High - AI successfully recalls user preferences and facts
-
-### 🔬 Test Results
-
-**Test Case:** User Preference Memory
+**Evidence:**
 ```
-Input: "My name is Bach, I like coffee"
-[Later]
-Query: "@ai What do I like to drink?"
-Result: ✅ AI correctly responded "You like coffee" 
-Similarity Score: 0.751
+[RAG] Clearing 6 vectors from Vectorize...
+[RAG] Total tracked vector IDs: 0
+[RAG] ✓ Successfully deleted 6 vectors
+
+# But immediately after:
+[RAG] Vectorize query returned 5 matches
+[RAG] Match (score: 0.693): Bach: I like coffee...  ← OLD DATA!
 ```
 
-**Test Case:** Multi-Context Retrieval
-```
-Messages: 
-  - "I like coffee"
-  - "I like pho"
-Query: "@ai What do I like to drink?"
-Result: ✅ Found 2 relevant contexts (scores: 0.753, 0.751)
-AI Response: Accurate with both food and drink preferences
-```
+**Root Cause:**
+- Tracking system added AFTER vectors already existed
+- `deleteByIds()` only deletes known IDs
+- Old untracked vectors persist in index
 
-### 🎛️ Configuration Summary
+=> Need a way to delete ALL vectors in Vectorize index, not just known IDs.
 
-```toml
-# wrangler.toml
-[ai]
-binding = "AI"
-remote = true
+2. User changes username in input field, but messages still show old username.
 
-[[vectorize]]
-binding = "VECTORIZE"
-index_name = "chat-index"
-remote = true
-```
+**Current Behavior:**
+- Username saved to localStorage 
+- Username in WebSocket URL query param (set once on connect) 
+- Changing input field doesn't update server-side username
 
-```typescript
-// Key Parameters
-- Embedding Model: @cf/baai/bge-base-en-v1.5
-- Embedding Dimensions: 768
-- Distance Metric: Cosine Similarity
-- TopK Results: 5
-- Similarity Threshold: 0.5
-- LLM Model: @cf/meta/llama-3.3-70b-instruct-fp8-fast
-```
+**Root Cause:**
+Username sent only once during WebSocket upgrade. No mechanism to update it dynamically.
 
-### 🚀 Future Enhancements
-
-Potential improvements for production:
-1. **Hybrid Search:** Combine semantic + keyword search
-2. **User-Scoped Vectors:** Add user ID to metadata for personalized RAG
-3. **Temporal Decay:** Weight recent messages higher
-4. **Namespace Separation:** Separate indexes for different chat rooms
-5. **Batch Embedding:** Process multiple messages together for efficiency
-6. **Feedback Loop:** Track which contexts led to good AI responses
+---
