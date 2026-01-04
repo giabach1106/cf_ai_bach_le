@@ -131,19 +131,19 @@ export class ChatRoom extends DurableObject {
 				return;
 			}
 
-			// Create chat message
-			const message: ChatMessage = {
-				id: crypto.randomUUID(),
-				username: session.username,
-				content: data.content || '',
-				timestamp: Date.now(),
-			};
+		// Create chat message
+		const message: ChatMessage = {
+			id: crypto.randomUUID(),
+			username: session.username,
+			content: data.content || '',
+			timestamp: Date.now(),
+		};
 
-			// Store message in history
-			await this.addMessageToHistory(message);
+		// Store message in history
+		await this.addMessageToHistory(message);
 
-			// Broadcast to all connected sessions
-			await this.broadcastMessage(message);
+		// Broadcast to all connected sessions (excluding sender to avoid duplicates)
+		await this.broadcastMessage(message, session);
 
 			// Check if this is an AI trigger message
 			if (message.content.trim().startsWith('@ai')) {
@@ -175,6 +175,30 @@ export class ChatRoom extends DurableObject {
 	}
 
 	/**
+	 * Generates text embedding using Workers AI
+	 */
+	private async generateEmbedding(text: string): Promise<number[]> {
+		try {
+			// Truncate text to prevent too large input (max ~512 tokens for BGE model)
+			const truncatedText = text.substring(0, 1000);
+			
+			const response = await this.env.AI.run(
+				'@cf/baai/bge-base-en-v1.5',
+				{ text: [truncatedText] }
+			) as { data: number[][] };
+			
+			if (!response?.data?.[0]) {
+				throw new Error('Invalid embedding response');
+			}
+			
+			return response.data[0];
+		} catch (error) {
+			console.error('[RAG] Error generating embedding:', error);
+			throw error;
+		}
+	}
+
+	/**
 	 * Handles AI request with streaming response
 	 */
 	private async handleAIRequest(prompt: string, requestingSession: Session): Promise<void> {
@@ -196,6 +220,88 @@ export class ChatRoom extends DurableObject {
 				}
 			}
 
+			// RAG: Retrieve relevant context from Vectorize
+			let contextString = '';
+			let foundContextCount = 0;
+			let debugInfo: string[] = [];
+			
+			try {
+				debugInfo.push(`🔍 Generating embedding for: "${prompt.substring(0, 30)}..."`);
+				
+				// Generate embedding for the user's prompt
+				const promptEmbedding = await this.generateEmbedding(prompt);
+				console.log(`[RAG] Generated embedding for prompt: "${prompt.substring(0, 50)}..."`);
+				debugInfo.push(`✓ Embedding generated (${promptEmbedding.length} dimensions)`);
+
+				// Query Vectorize for top 5 most similar messages (increased from 3)
+				debugInfo.push(`🔎 Querying Vectorize for similar messages...`);
+				const searchResults = await this.env.VECTORIZE.query(promptEmbedding, {
+					topK: 5,
+					returnValues: false,
+					returnMetadata: 'all',
+				});
+
+				console.log(`[RAG] Vectorize query returned ${searchResults.matches?.length || 0} matches`);
+				debugInfo.push(`✓ Found ${searchResults.matches?.length || 0} potential matches`);
+
+				// Extract context from matching vectors
+				if (searchResults.matches && searchResults.matches.length > 0) {
+					const contextMessages = searchResults.matches
+						.filter((match) => match.score && match.score > 0.5) // Filter by similarity score
+						.map((match) => {
+							const content = match.metadata?.content as string;
+							const username = match.metadata?.username as string;
+							const score = match.score?.toFixed(3);
+							console.log(`[RAG] Match (score: ${score}): ${username}: ${content?.substring(0, 50)}...`);
+							debugInfo.push(`  📝 Match (${score}): ${username}: "${content?.substring(0, 40)}..."`);
+							return `${username}: ${content}`;
+						})
+						.filter(Boolean);
+
+					foundContextCount = contextMessages.length;
+
+					if (contextMessages.length > 0) {
+						contextString = '\n\nIMPORTANT - Relevant information from previous messages:\n' + 
+							contextMessages.map((msg, i) => `${i + 1}. ${msg}`).join('\n') +
+							'\n\nUse this information to answer the user\'s question.';
+						debugInfo.push(`✅ Using ${foundContextCount} context messages for RAG`);
+					} else {
+						debugInfo.push(`⚠️ No matches above similarity threshold (0.5)`);
+					}
+				} else {
+					debugInfo.push(`ℹ️ No matches found in Vectorize`);
+				}
+
+				console.log(`[RAG] Found ${foundContextCount} relevant context messages`);
+			} catch (error) {
+				console.error('Error retrieving context from Vectorize:', error);
+				debugInfo.push(`❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+				// Continue without context if retrieval fails
+			}
+
+			// Send debug info to the requesting user (only if needed for debugging)
+			// Set to true to enable RAG debug messages in chat
+			const ENABLE_RAG_DEBUG = false;
+			
+			if (ENABLE_RAG_DEBUG && debugInfo.length > 0) {
+				try {
+					requestingSession.webSocket.send(
+						JSON.stringify({
+							type: 'rag_debug',
+							info: debugInfo.join('\n'),
+						})
+					);
+				} catch (e) {
+					console.error('Error sending debug info:', e);
+				}
+			}
+
+			// Build system message with optional context
+			const systemMessage = 'You are a helpful AI assistant in a chat room. Be concise and friendly. ' +
+				'If relevant context from previous conversations is provided, USE IT to answer accurately. ' +
+				'Pay special attention to user preferences, names, and facts mentioned in the context.' + 
+				contextString;
+
 			// Call Workers AI with Llama 3.3 model with streaming enabled
 			const response = await this.env.AI.run(
 				'@cf/meta/llama-3.3-70b-instruct-fp8-fast',
@@ -203,7 +309,7 @@ export class ChatRoom extends DurableObject {
 					messages: [
 						{
 							role: 'system',
-							content: 'You are a helpful AI assistant in a chat room. Be concise and friendly.',
+							content: systemMessage,
 						},
 						{
 							role: 'user',
@@ -340,6 +446,68 @@ export class ChatRoom extends DurableObject {
 
 		// Save to storage as JSON string
 		await this.ctx.storage.put(this.HISTORY_KEY, JSON.stringify(trimmedHistory));
+
+		// Store user messages in Vectorize for RAG (async, non-blocking)
+		if (message.username !== 'System' && message.username !== 'AI Assistant') {
+			// Run in background - don't block message storage
+			this.storeMessageEmbedding(message).catch(error => {
+				console.error('[RAG] Error storing message embedding:', error);
+			});
+		}
+	}
+
+	/**
+	 * Stores message embedding in Vectorize (non-blocking background operation)
+	 */
+	private async storeMessageEmbedding(message: ChatMessage): Promise<void> {
+		try {
+			// Strip @ai prefix if present (we want to store the actual content, not the command)
+			const contentToStore = message.content.trim().startsWith('@ai')
+				? message.content.trim().substring(3).trim()
+				: message.content;
+			
+			console.log(`[RAG] Storing message in Vectorize: ${message.username}: "${contentToStore.substring(0, 50)}..."`);
+			
+			// Generate embedding for the message content
+			const embedding = await this.generateEmbedding(contentToStore);
+			console.log(`[RAG] Generated embedding with ${embedding.length} dimensions`);
+
+			// Insert into Vectorize with message content as metadata
+			const result = await this.env.VECTORIZE.upsert([
+				{
+					id: message.id,
+					values: embedding,
+					metadata: {
+						content: contentToStore,
+						username: message.username,
+						timestamp: message.timestamp,
+					},
+				},
+			]);
+			
+			console.log(`[RAG] Successfully stored message with ID: ${message.id}`);
+			
+			// Optional: Send confirmation to all users (commented out for production)
+			// Uncomment below to debug RAG storage
+			/*
+			const debugMsg = `💾 Stored in RAG: "${contentToStore.substring(0, 40)}..." (${embedding.length}D)`;
+			for (const session of this.sessions) {
+				try {
+					session.webSocket.send(
+						JSON.stringify({
+							type: 'rag_debug',
+							info: debugMsg,
+						})
+					);
+				} catch (e) {
+					// Ignore send errors
+				}
+			}
+			*/
+		} catch (error) {
+			console.error('[RAG] Failed to store embedding:', error);
+			throw error;
+		}
 	}
 
 	/**
@@ -362,7 +530,22 @@ export class ChatRoom extends DurableObject {
 	 * Clears all message history from storage
 	 */
 	private async clearHistory(): Promise<void> {
+		// Get all message IDs before clearing
+		const history = await this.getHistory();
+		const vectorIds = history.map((msg) => msg.id);
+
+		// Clear message history from storage
 		await this.ctx.storage.delete(this.HISTORY_KEY);
+
+		// Delete all vectors from Vectorize index
+		if (vectorIds.length > 0) {
+			try {
+				await this.env.VECTORIZE.deleteByIds(vectorIds);
+			} catch (error) {
+				console.error('Error deleting vectors from Vectorize:', error);
+				// Don't throw - history is already cleared from storage
+			}
+		}
 	}
 
 	/**
