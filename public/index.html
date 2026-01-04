@@ -884,8 +884,12 @@
             for (const codeBlock of codeBlocks) {
                 const code = codeBlock.textContent.trim();
                 
-                // Check if it's a mermaid diagram
-                if (code.startsWith('mindmap') || 
+                // Check if it's a mermaid diagram by:
+                // 1. Code block has language-mermaid class (from ```mermaid)
+                // 2. Content starts with mermaid diagram keywords
+                const hasMermaidClass = codeBlock.classList.contains('language-mermaid') || 
+                                        codeBlock.parentElement?.classList.contains('language-mermaid');
+                const isMermaidContent = code.startsWith('mindmap') || 
                     code.startsWith('graph') || 
                     code.startsWith('flowchart') ||
                     code.startsWith('sequenceDiagram') ||
@@ -893,7 +897,10 @@
                     code.startsWith('stateDiagram') ||
                     code.startsWith('erDiagram') ||
                     code.startsWith('pie') ||
-                    code.startsWith('gantt')) {
+                    code.startsWith('gantt');
+                
+                if (hasMermaidClass || isMermaidContent) {
+                    console.log('[Mermaid] Detected diagram:', { hasMermaidClass, isMermaidContent, codePreview: code.substring(0, 50) });
                     
                     const pre = codeBlock.parentElement;
                     const mermaidContainer = document.createElement('div');
@@ -1407,8 +1414,9 @@
 
             const time = new Date(message.timestamp).toLocaleTimeString();
             
-            // Render markdown content
-            const htmlContent = marked.parse(message.content);
+            // Pre-process to fix raw mermaid diagrams, then render markdown
+            const processedContent = preprocessMermaidContent(message.content);
+            const htmlContent = marked.parse(processedContent);
 
             messageDiv.innerHTML = `
                 <div class="message-header">
@@ -1452,6 +1460,37 @@
             scrollToBottom();
         }
 
+        // Pre-process content to fix raw mermaid diagrams without proper fencing
+        function preprocessMermaidContent(content) {
+            // Pattern to detect raw mindmap that starts with "mindmap" followed by indented content
+            // but is NOT inside a code fence
+            const mermaidKeywords = ['mindmap', 'graph ', 'graph\n', 'flowchart', 'sequenceDiagram', 'classDiagram'];
+            
+            let result = content;
+            
+            for (const keyword of mermaidKeywords) {
+                // Look for the keyword at start of line, not inside code block
+                const regex = new RegExp(`^(${keyword.trim()}\\s*\\n(?:[ ]{2,}.*\\n?)*)`, 'gm');
+                
+                result = result.replace(regex, (match, group) => {
+                    // Check if this is already inside a code block (has ``` before it on same "block")
+                    const beforeMatch = content.substring(0, content.indexOf(match));
+                    const codeBlockCount = (beforeMatch.match(/```/g) || []).length;
+                    
+                    // If odd number of ```, we're inside a code block, don't modify
+                    if (codeBlockCount % 2 === 1) {
+                        return match;
+                    }
+                    
+                    // Wrap in mermaid code fence
+                    console.log('[Mermaid] Auto-wrapping raw diagram:', keyword);
+                    return '```mermaid\n' + match.trim() + '\n```\n';
+                });
+            }
+            
+            return result;
+        }
+
         // Append streaming AI content
         function appendAIStream(messageId, chunk) {
             const aiMsg = aiMessages.get(messageId);
@@ -1460,8 +1499,11 @@
             // Accumulate content
             aiMsg.content += chunk;
 
+            // Pre-process to fix raw mermaid diagrams
+            const processedContent = preprocessMermaidContent(aiMsg.content);
+
             // Render markdown
-            const htmlContent = marked.parse(aiMsg.content);
+            const htmlContent = marked.parse(processedContent);
 
             // Update message content
             const contentDiv = aiMsg.element.querySelector('.message-content');

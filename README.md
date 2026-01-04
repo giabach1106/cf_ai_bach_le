@@ -329,21 +329,114 @@ localStorage.getItem('chat_room_id')
 
 ## 🚀 Deployment to Production
 
-1. **Deploy to Cloudflare Workers:**
-   ```bash
-   npm run deploy
-   ```
+### Bước 1: Đăng nhập Cloudflare
 
-2. **Verify Vectorize Index Exists:**
-   ```bash
-   npx wrangler vectorize list
-   # Should show: chat-index (768 dimensions, cosine)
-   ```
+```bash
+npx wrangler login
+```
 
-3. **Test Production Deployment:**
-   - Each user automatically gets isolated room
-   - Test clearing chat to verify complete vector cleanup
-   - Change username mid-session to verify real-time updates
+Lệnh này sẽ mở browser để bạn đăng nhập vào Cloudflare account. Sau khi đăng nhập thành công, Wrangler sẽ lưu credentials.
+
+### Bước 2: Tạo Vectorize Index (Nếu chưa có)
+
+Vectorize index cần thiết cho tính năng RAG. Kiểm tra xem đã có chưa:
+
+```bash
+npx wrangler vectorize list
+```
+
+Nếu chưa có index `chat-index`, tạo mới:
+
+```bash
+npx wrangler vectorize create chat-index --dimensions=768 --metric=cosine
+```
+
+**Lưu ý:** Vectorize hiện tại chỉ có sẵn trên **paid plans** (Workers Paid hoặc Enterprise). Nếu bạn dùng free plan, RAG sẽ không hoạt động nhưng các tính năng khác vẫn chạy bình thường.
+
+### Bước 3: Deploy Worker
+
+```bash
+npm run deploy
+```
+
+Hoặc:
+
+```bash
+npx wrangler deploy
+```
+
+Quá trình deploy sẽ:
+- ✅ Build TypeScript code
+- ✅ Upload assets từ `public/` folder
+- ✅ Deploy Worker với tên `main` (có thể đổi trong `wrangler.toml`)
+- ✅ Tạo Durable Objects namespace
+- ✅ Bind Workers AI, Vectorize, và Assets
+
+### Bước 4: Verify Deployment
+
+Sau khi deploy thành công, bạn sẽ nhận được URL như:
+```
+https://main.your-subdomain.workers.dev
+```
+
+**Test các tính năng:**
+1. ✅ Mở URL trong browser
+2. ✅ Test chat với `@ai` command
+3. ✅ Test GitHub analysis với `/analyze https://github.com/owner/repo`
+4. ✅ Test Mind Map zoom và download
+5. ✅ Test clear chat để verify vector cleanup
+
+### Bước 5: Custom Domain (Optional)
+
+Nếu muốn dùng custom domain:
+
+1. Thêm domain vào Cloudflare Dashboard
+2. Tạo CNAME record trỏ đến worker
+3. Hoặc dùng Cloudflare Workers Routes
+
+### Troubleshooting Deployment
+
+**Lỗi: "Vectorize index not found"**
+```bash
+# Tạo index nếu chưa có
+npx wrangler vectorize create chat-index --dimensions=768 --metric=cosine
+```
+
+**Lỗi: "Durable Objects migration failed"**
+- Đảm bảo `wrangler.toml` có đúng migrations config
+- Nếu đã deploy trước đó, có thể cần update migration tag
+
+**Lỗi: "Workers AI not available"**
+- Workers AI cần account có access (thường là paid plans)
+- Kiểm tra trong Cloudflare Dashboard → Workers → AI
+
+**Lỗi: "Assets binding failed"**
+- Đảm bảo folder `public/` tồn tại và có file `index.html`
+- Kiểm tra `wrangler.toml` có đúng `[assets]` config
+
+### Production Checklist
+
+Trước khi deploy production, đảm bảo:
+
+- [ ] ✅ Đã test tất cả features local (`npm run dev`)
+- [ ] ✅ Vectorize index đã được tạo
+- [ ] ✅ Workers AI binding hoạt động
+- [ ] ✅ Durable Objects migrations đúng
+- [ ] ✅ Assets folder có đầy đủ files
+- [ ] ✅ Environment variables (nếu có) đã set trong Cloudflare Dashboard
+
+### Update Deployment
+
+Khi có code mới, chỉ cần chạy lại:
+
+```bash
+npm run deploy
+```
+
+Wrangler sẽ tự động:
+- Detect changes
+- Build và upload code mới
+- Update worker không cần downtime
 
 ## ⚠️ Important Notes
 

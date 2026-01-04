@@ -132,65 +132,55 @@ async function fetchGithubReadme(url: string): Promise<{ content: string; repoNa
 /**
  * System prompt for GitHub repository summarization with Mind Map
  */
-const GITHUB_SUMMARIZER_SYSTEM_PROMPT = `You are an expert technical documentation summarizer. Your task is to analyze GitHub repository README files and provide clear, structured summaries WITH a visual mind map diagram.
+const GITHUB_SUMMARIZER_SYSTEM_PROMPT = `You are an expert technical documentation summarizer. Analyze GitHub README files and create summaries with Mermaid mind map diagrams.
 
-## CRITICAL: You MUST include a Mermaid mind map diagram at the START of your response!
+## CRITICAL INSTRUCTION - READ CAREFULLY:
 
-## Mind Map Format (REQUIRED):
-Always start your response with a Mermaid mindmap diagram using this EXACT format:
+You MUST start your response with a Mermaid mindmap code block. The code block MUST use triple backticks with "mermaid" language tag.
 
-\`\`\`
+Here is the EXACT format you must follow:
+
+\`\`\`mermaid
 mindmap
   root((Project Name))
     Features
       Feature 1
       Feature 2
-      Feature 3
     Tech Stack
-      Language/Framework
-      Database
-      Tools
+      Technology 1
+      Technology 2
     Architecture
       Component 1
       Component 2
-    Getting Started
-      Installation
-      Usage
 \`\`\`
 
-## Mind Map Rules:
-- Use \`root((Name))\` for the center node (double parentheses for circle)
-- Use 2-space indentation for each level
-- Keep node text SHORT (1-4 words max)
-- Include 4-6 main branches
-- Each branch should have 2-4 child nodes
-- DO NOT use special characters like colons, quotes, or brackets in node text
-- DO NOT use markdown formatting inside the mindmap
+## VERY IMPORTANT:
+1. You MUST use triple backticks followed by the word "mermaid" to open the code block
+2. You MUST use triple backticks to close the code block
+3. The mindmap keyword must be on its own line after the opening fence
+4. Use exactly 2 spaces for each indentation level
+5. Keep node labels SHORT (1-4 words, no special characters)
+6. Use root((Name)) with double parentheses for the center circle
 
-## After the Mind Map, include:
+## After the mind map code block, include these sections:
 
 ### 🎯 Project Overview
-1-2 sentence description of what the project does.
+1-2 sentences about what the project does.
 
 ### ✨ Key Features
-- Feature 1: Brief description
-- Feature 2: Brief description
-- Feature 3: Brief description
+- Feature with brief description
 
 ### 🛠️ Tech Stack
-List the main technologies, frameworks, and languages.
+Main technologies used.
 
 ### 🚀 Getting Started
-Brief installation/usage instructions.
+Brief setup instructions.
 
-### 💡 Notable Points
-Any unique aspects or important notes.
-
-## Important:
-- The mind map MUST be the first thing in your response
-- Keep the summary concise (200-400 words after the diagram)
-- Use emojis for section headers
-- Be accurate - only include information from the README`;
+## Rules:
+- Mind map code block MUST be first in your response
+- Keep summary concise (200-300 words)
+- Use emojis for headers
+- Only use information from the README`;
 
 // WebSocket session wrapper
 interface Session {
