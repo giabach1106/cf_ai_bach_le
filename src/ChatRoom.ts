@@ -142,8 +142,8 @@ export class ChatRoom extends DurableObject {
 		// Store message in history
 		await this.addMessageToHistory(message);
 
-		// Broadcast to all connected sessions (excluding sender to avoid duplicates)
-		await this.broadcastMessage(message, session);
+		// Broadcast to all connected sessions (including sender)
+		await this.broadcastMessage(message);
 
 			// Check if this is an AI trigger message
 			if (message.content.trim().startsWith('@ai')) {
@@ -175,27 +175,47 @@ export class ChatRoom extends DurableObject {
 	}
 
 	/**
-	 * Generates text embedding using Workers AI
+	 * Generates text embedding using Workers AI with retry logic
 	 */
-	private async generateEmbedding(text: string): Promise<number[]> {
-		try {
-			// Truncate text to prevent too large input (max ~512 tokens for BGE model)
-			const truncatedText = text.substring(0, 1000);
-			
-			const response = await this.env.AI.run(
-				'@cf/baai/bge-base-en-v1.5',
-				{ text: [truncatedText] }
-			) as { data: number[][] };
-			
-			if (!response?.data?.[0]) {
-				throw new Error('Invalid embedding response');
+	private async generateEmbedding(text: string, retries = 3): Promise<number[]> {
+		// Truncate text to prevent too large input (max ~512 tokens for BGE model)
+		const truncatedText = text.substring(0, 1000);
+		
+		for (let attempt = 1; attempt <= retries; attempt++) {
+			try {
+				const response = await this.env.AI.run(
+					'@cf/baai/bge-base-en-v1.5',
+					{ text: [truncatedText] }
+				) as { data: number[][] };
+				
+				if (!response?.data?.[0]) {
+					throw new Error('Invalid embedding response');
+				}
+				
+				// Success - return the embedding
+				if (attempt > 1) {
+					console.log(`[RAG] Embedding generation succeeded on attempt ${attempt}`);
+				}
+				return response.data[0];
+			} catch (error) {
+				const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+				console.error(`[RAG] Embedding error (attempt ${attempt}/${retries}):`, errorMsg);
+				
+				// If this was the last attempt, throw the error
+				if (attempt === retries) {
+					console.error('[RAG] All embedding attempts failed');
+					throw error;
+				}
+				
+				// Exponential backoff before retry (500ms, 1s, 2s...)
+				const delay = Math.min(500 * Math.pow(2, attempt - 1), 3000);
+				console.log(`[RAG] Retrying in ${delay}ms...`);
+				await new Promise(resolve => setTimeout(resolve, delay));
 			}
-			
-			return response.data[0];
-		} catch (error) {
-			console.error('[RAG] Error generating embedding:', error);
-			throw error;
 		}
+		
+		// Should never reach here, but TypeScript needs it
+		throw new Error('Embedding generation failed after all retries');
 	}
 
 	/**
@@ -224,6 +244,7 @@ export class ChatRoom extends DurableObject {
 			let contextString = '';
 			let foundContextCount = 0;
 			let debugInfo: string[] = [];
+			let ragFailed = false;
 			
 			try {
 				debugInfo.push(`🔍 Generating embedding for: "${prompt.substring(0, 30)}..."`);
@@ -233,55 +254,89 @@ export class ChatRoom extends DurableObject {
 				console.log(`[RAG] Generated embedding for prompt: "${prompt.substring(0, 50)}..."`);
 				debugInfo.push(`✓ Embedding generated (${promptEmbedding.length} dimensions)`);
 
-				// Query Vectorize for top 5 most similar messages (increased from 3)
+				// Query Vectorize for top 5 most similar messages (with retry)
 				debugInfo.push(`🔎 Querying Vectorize for similar messages...`);
-				const searchResults = await this.env.VECTORIZE.query(promptEmbedding, {
-					topK: 5,
-					returnValues: false,
-					returnMetadata: 'all',
-				});
-
-				console.log(`[RAG] Vectorize query returned ${searchResults.matches?.length || 0} matches`);
-				debugInfo.push(`✓ Found ${searchResults.matches?.length || 0} potential matches`);
-
-				// Extract context from matching vectors
-				if (searchResults.matches && searchResults.matches.length > 0) {
-					const contextMessages = searchResults.matches
-						.filter((match) => match.score && match.score > 0.5) // Filter by similarity score
-						.map((match) => {
-							const content = match.metadata?.content as string;
-							const username = match.metadata?.username as string;
-							const score = match.score?.toFixed(3);
-							console.log(`[RAG] Match (score: ${score}): ${username}: ${content?.substring(0, 50)}...`);
-							debugInfo.push(`  📝 Match (${score}): ${username}: "${content?.substring(0, 40)}..."`);
-							return `${username}: ${content}`;
-						})
-						.filter(Boolean);
-
-					foundContextCount = contextMessages.length;
-
-					if (contextMessages.length > 0) {
-						contextString = '\n\nIMPORTANT - Relevant information from previous messages:\n' + 
-							contextMessages.map((msg, i) => `${i + 1}. ${msg}`).join('\n') +
-							'\n\nUse this information to answer the user\'s question.';
-						debugInfo.push(`✅ Using ${foundContextCount} context messages for RAG`);
-					} else {
-						debugInfo.push(`⚠️ No matches above similarity threshold (0.5)`);
+				let searchResults;
+				let queryAttempts = 0;
+				const maxQueryAttempts = 2;
+				
+				while (queryAttempts < maxQueryAttempts) {
+					try {
+						searchResults = await this.env.VECTORIZE.query(promptEmbedding, {
+							topK: 5,
+							returnValues: false,
+							returnMetadata: 'all',
+						});
+						break; // Success, exit retry loop
+					} catch (queryError) {
+						queryAttempts++;
+						console.error(`[RAG] Vectorize query error (attempt ${queryAttempts}/${maxQueryAttempts}):`, queryError);
+						
+						if (queryAttempts >= maxQueryAttempts) {
+							throw queryError; // Re-throw if all attempts failed
+						}
+						
+						// Wait before retry
+						await new Promise(resolve => setTimeout(resolve, 1000));
 					}
-				} else {
-					debugInfo.push(`ℹ️ No matches found in Vectorize`);
 				}
 
-				console.log(`[RAG] Found ${foundContextCount} relevant context messages`);
+				if (searchResults) {
+					console.log(`[RAG] Vectorize query returned ${searchResults.matches?.length || 0} matches`);
+					debugInfo.push(`✓ Found ${searchResults.matches?.length || 0} potential matches`);
+
+					// Extract context from matching vectors
+					if (searchResults.matches && searchResults.matches.length > 0) {
+						const contextMessages = searchResults.matches
+							.filter((match) => match.score && match.score > 0.5) // Filter by similarity score
+							.map((match) => {
+								const content = match.metadata?.content as string;
+								const username = match.metadata?.username as string;
+								const score = match.score?.toFixed(3);
+								console.log(`[RAG] Match (score: ${score}): ${username}: ${content?.substring(0, 50)}...`);
+								debugInfo.push(`  📝 Match (${score}): ${username}: "${content?.substring(0, 40)}..."`);
+								return `${username}: ${content}`;
+							})
+							.filter(Boolean);
+
+						foundContextCount = contextMessages.length;
+
+					if (contextMessages.length > 0) {
+						contextString = '\n\n[Context from previous conversation]:\n' + 
+							contextMessages.map((msg, i) => `- ${msg}`).join('\n');
+						debugInfo.push(`✅ Using ${foundContextCount} context messages for RAG`);
+						} else {
+							debugInfo.push(`⚠️ No matches above similarity threshold (0.5)`);
+						}
+					} else {
+						debugInfo.push(`ℹ️ No matches found in Vectorize`);
+					}
+
+					console.log(`[RAG] Found ${foundContextCount} relevant context messages`);
+				}
 			} catch (error) {
-				console.error('Error retrieving context from Vectorize:', error);
-				debugInfo.push(`❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-				// Continue without context if retrieval fails
+				ragFailed = true;
+				const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+				console.error('[RAG] Context retrieval failed:', errorMsg);
+				debugInfo.push(`❌ RAG Error: ${errorMsg}`);
+				debugInfo.push(`⚠️ Continuing without RAG context...`);
+				
+				// Notify user about RAG failure (only if persistent)
+				try {
+					requestingSession.webSocket.send(
+						JSON.stringify({
+							type: 'system_message',
+							message: '⚠️ Note: Context retrieval temporarily unavailable. AI will respond without previous conversation context.',
+						})
+					);
+				} catch (e) {
+					console.error('Error sending RAG failure notification:', e);
+				}
 			}
 
 			// Send debug info to the requesting user (only if needed for debugging)
 			// Set to true to enable RAG debug messages in chat
-			const ENABLE_RAG_DEBUG = false;
+			const ENABLE_RAG_DEBUG = true;
 			
 			if (ENABLE_RAG_DEBUG && debugInfo.length > 0) {
 				try {
@@ -297,10 +352,12 @@ export class ChatRoom extends DurableObject {
 			}
 
 			// Build system message with optional context
-			const systemMessage = 'You are a helpful AI assistant in a chat room. Be concise and friendly. ' +
-				'If relevant context from previous conversations is provided, USE IT to answer accurately. ' +
-				'Pay special attention to user preferences, names, and facts mentioned in the context.' + 
-				contextString;
+			let systemMessage = 'You are a helpful AI assistant in a chat room. Be concise, natural, and friendly.';
+			
+			// Only add context if we actually found relevant information
+			if (contextString) {
+				systemMessage += contextString;
+			}
 
 			// Call Workers AI with Llama 3.3 model with streaming enabled
 			const response = await this.env.AI.run(
@@ -458,55 +515,86 @@ export class ChatRoom extends DurableObject {
 
 	/**
 	 * Stores message embedding in Vectorize (non-blocking background operation)
+	 * Retries on failure to handle transient Cloudflare service issues
 	 */
-	private async storeMessageEmbedding(message: ChatMessage): Promise<void> {
-		try {
-			// Strip @ai prefix if present (we want to store the actual content, not the command)
-			const contentToStore = message.content.trim().startsWith('@ai')
-				? message.content.trim().substring(3).trim()
-				: message.content;
-			
-			console.log(`[RAG] Storing message in Vectorize: ${message.username}: "${contentToStore.substring(0, 50)}..."`);
-			
-			// Generate embedding for the message content
-			const embedding = await this.generateEmbedding(contentToStore);
-			console.log(`[RAG] Generated embedding with ${embedding.length} dimensions`);
+	private async storeMessageEmbedding(message: ChatMessage, maxRetries = 2): Promise<void> {
+		// Strip @ai prefix if present (we want to store the actual content, not the command)
+		const contentToStore = message.content.trim().startsWith('@ai')
+			? message.content.trim().substring(3).trim()
+			: message.content;
+		
+		// Skip empty messages
+		if (!contentToStore || contentToStore.length < 3) {
+			console.log(`[RAG] Skipping empty or too short message`);
+			return;
+		}
+		
+		console.log(`[RAG] Storing message in Vectorize: ${message.username}: "${contentToStore.substring(0, 50)}..."`);
+		
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			try {
+				// Generate embedding for the message content (with built-in retries)
+				const embedding = await this.generateEmbedding(contentToStore);
+				console.log(`[RAG] Generated embedding with ${embedding.length} dimensions`);
 
-			// Insert into Vectorize with message content as metadata
-			const result = await this.env.VECTORIZE.upsert([
-				{
-					id: message.id,
-					values: embedding,
-					metadata: {
-						content: contentToStore,
-						username: message.username,
-						timestamp: message.timestamp,
-					},
-				},
-			]);
-			
-			console.log(`[RAG] Successfully stored message with ID: ${message.id}`);
-			
-			// Optional: Send confirmation to all users (commented out for production)
-			// Uncomment below to debug RAG storage
-			/*
-			const debugMsg = `💾 Stored in RAG: "${contentToStore.substring(0, 40)}..." (${embedding.length}D)`;
-			for (const session of this.sessions) {
-				try {
-					session.webSocket.send(
-						JSON.stringify({
-							type: 'rag_debug',
-							info: debugMsg,
-						})
-					);
-				} catch (e) {
-					// Ignore send errors
+				// Track this vector ID for complete cleanup later
+				const allVectorIds = await this.ctx.storage.get<string[]>('all_vector_ids') || [];
+				if (!allVectorIds.includes(message.id)) {
+					allVectorIds.push(message.id);
+					// Keep only last 200 IDs to prevent unbounded growth
+					const trimmedIds = allVectorIds.slice(-200);
+					await this.ctx.storage.put('all_vector_ids', trimmedIds);
 				}
+
+				// Insert into Vectorize with retry logic
+				let upsertAttempts = 0;
+				const maxUpsertAttempts = 2;
+				
+				while (upsertAttempts < maxUpsertAttempts) {
+					try {
+						await this.env.VECTORIZE.upsert([
+							{
+								id: message.id,
+								values: embedding,
+								metadata: {
+									content: contentToStore,
+									username: message.username,
+									timestamp: message.timestamp,
+								},
+							},
+						]);
+						
+						console.log(`[RAG] ✓ Successfully stored message with ID: ${message.id}`);
+						return; // Success - exit function
+					} catch (upsertError) {
+						upsertAttempts++;
+						console.error(`[RAG] Vectorize upsert error (attempt ${upsertAttempts}/${maxUpsertAttempts}):`, upsertError);
+						
+						if (upsertAttempts >= maxUpsertAttempts) {
+							throw upsertError; // Re-throw if all attempts failed
+						}
+						
+						// Wait before retry
+						await new Promise(resolve => setTimeout(resolve, 1000));
+					}
+				}
+			} catch (error) {
+				const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+				console.error(`[RAG] Storage attempt ${attempt}/${maxRetries} failed:`, errorMsg);
+				
+				// If this was the last attempt, log and give up
+				if (attempt === maxRetries) {
+					console.error(`[RAG] ✗ Failed to store embedding after ${maxRetries} attempts. Giving up.`);
+					console.error('[RAG] Message will NOT be available for future RAG queries.');
+					// Don't throw - this is a background operation, don't break the chat
+					return;
+				}
+				
+				// Exponential backoff before retry
+				const delay = 2000 * attempt;
+				console.log(`[RAG] Retrying storage in ${delay}ms...`);
+				await new Promise(resolve => setTimeout(resolve, delay));
 			}
-			*/
-		} catch (error) {
-			console.error('[RAG] Failed to store embedding:', error);
-			throw error;
 		}
 	}
 
@@ -527,25 +615,54 @@ export class ChatRoom extends DurableObject {
 	}
 
 	/**
-	 * Clears all message history from storage
+	 * Clears all message history from storage and Vectorize
 	 */
 	private async clearHistory(): Promise<void> {
 		// Get all message IDs before clearing
 		const history = await this.getHistory();
 		const vectorIds = history.map((msg) => msg.id);
 
-		// Clear message history from storage
-		await this.ctx.storage.delete(this.HISTORY_KEY);
+		console.log(`[RAG] Clearing ${vectorIds.length} vectors from Vectorize...`);
 
-		// Delete all vectors from Vectorize index
-		if (vectorIds.length > 0) {
-			try {
-				await this.env.VECTORIZE.deleteByIds(vectorIds);
-			} catch (error) {
-				console.error('Error deleting vectors from Vectorize:', error);
-				// Don't throw - history is already cleared from storage
+		// Also track ALL vector IDs we've ever created (to handle vectors outside current history)
+		const allVectorIds = await this.ctx.storage.get<string[]>('all_vector_ids') || [];
+		console.log(`[RAG] Total tracked vector IDs: ${allVectorIds.length}`);
+
+		// Combine both sets of IDs (history + tracked)
+		const idsToDelete = [...new Set([...vectorIds, ...allVectorIds])];
+		
+		console.log(`[RAG] Deleting ${idsToDelete.length} total vectors...`);
+
+		// Delete all vectors from Vectorize index first (with retry)
+		if (idsToDelete.length > 0) {
+			let deleteAttempts = 0;
+			const maxDeleteAttempts = 3;
+			
+			while (deleteAttempts < maxDeleteAttempts) {
+				try {
+					await this.env.VECTORIZE.deleteByIds(idsToDelete);
+					console.log(`[RAG] ✓ Successfully deleted ${idsToDelete.length} vectors`);
+					break;
+				} catch (error) {
+					deleteAttempts++;
+					console.error(`[RAG] Error deleting vectors (attempt ${deleteAttempts}/${maxDeleteAttempts}):`, error);
+					
+					if (deleteAttempts >= maxDeleteAttempts) {
+						console.error('[RAG] Failed to delete vectors after all retries');
+						// Continue anyway - don't block history clearing
+					} else {
+						// Wait before retry (exponential backoff)
+						await new Promise(resolve => setTimeout(resolve, 1000 * deleteAttempts));
+					}
+				}
 			}
 		}
+
+		// Clear message history from storage
+		await this.ctx.storage.delete(this.HISTORY_KEY);
+		// Clear tracked vector IDs
+		await this.ctx.storage.delete('all_vector_ids');
+		console.log(`[RAG] ✓ Cleared message history and vector tracking from storage`);
 	}
 
 	/**
