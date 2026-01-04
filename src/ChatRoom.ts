@@ -197,7 +197,7 @@ export class ChatRoom extends DurableObject {
 			}
 
 			// Call Workers AI with Llama 3.3 model with streaming enabled
-			const stream = await this.env.AI.run(
+			const response = await this.env.AI.run(
 				'@cf/meta/llama-3.3-70b-instruct-fp8-fast',
 				{
 					messages: [
@@ -215,28 +215,57 @@ export class ChatRoom extends DurableObject {
 			);
 
 			// Process the streaming response
-			// Workers AI returns a ReadableStream with chunks containing the response text
+			// Workers AI returns a ReadableStream of Uint8Array chunks (SSE format)
+			const decoder = new TextDecoder();
 			let buffer = '';
-			
-			for await (const chunk of stream) {
-				// Each chunk is an object with a 'response' field containing the text
-				if (chunk.response) {
-					const content = chunk.response;
-					fullResponse += content;
 
-					// Send the chunk immediately to all connected clients
-					const streamChunk = JSON.stringify({
-						type: 'ai_stream',
-						messageId: aiMessageId,
-						chunk: content,
-					});
+			for await (const chunk of response as AsyncIterable<Uint8Array>) {
+				// Decode the Uint8Array to string
+				const text = decoder.decode(chunk, { stream: true });
+				buffer += text;
 
-					for (const session of this.sessions) {
+				// Split by newlines to process complete SSE messages
+				const lines = buffer.split('\n');
+				
+				// Keep the last incomplete line in the buffer
+				buffer = lines.pop() || '';
+
+				for (const line of lines) {
+					// SSE format: "data: {...}"
+					if (line.startsWith('data: ')) {
+						const jsonStr = line.substring(6).trim();
+						
+						// Skip [DONE] marker
+						if (jsonStr === '[DONE]') {
+							continue;
+						}
+
 						try {
-							session.webSocket.send(streamChunk);
-						} catch (error) {
-							console.error('Error sending stream chunk:', error);
-							this.sessions.delete(session);
+							const data = JSON.parse(jsonStr);
+							
+							// Extract the response text
+							if (data.response) {
+								const content = data.response;
+								fullResponse += content;
+
+								// Send the chunk immediately to all connected clients
+								const streamChunk = JSON.stringify({
+									type: 'ai_stream',
+									messageId: aiMessageId,
+									chunk: content,
+								});
+
+								for (const session of this.sessions) {
+									try {
+										session.webSocket.send(streamChunk);
+									} catch (error) {
+										console.error('Error sending stream chunk:', error);
+										this.sessions.delete(session);
+									}
+								}
+							}
+						} catch (parseError) {
+							console.error('Error parsing JSON:', parseError, 'Line:', jsonStr);
 						}
 					}
 				}
@@ -257,13 +286,15 @@ export class ChatRoom extends DurableObject {
 			}
 
 			// Store the complete AI response in history
-			const aiMessage: ChatMessage = {
-				id: aiMessageId,
-				username: 'AI Assistant',
-				content: fullResponse,
-				timestamp: Date.now(),
-			};
-			await this.addMessageToHistory(aiMessage);
+			if (fullResponse) {
+				const aiMessage: ChatMessage = {
+					id: aiMessageId,
+					username: 'AI Assistant',
+					content: fullResponse,
+					timestamp: Date.now(),
+				};
+				await this.addMessageToHistory(aiMessage);
+			}
 
 		} catch (error) {
 			console.error('Error during AI streaming:', error);
@@ -272,7 +303,7 @@ export class ChatRoom extends DurableObject {
 			const errorMessage = JSON.stringify({
 				type: 'ai_error',
 				messageId: aiMessageId,
-				message: 'AI request failed. Please try again later.',
+				message: `AI request failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
 			});
 
 			for (const session of this.sessions) {

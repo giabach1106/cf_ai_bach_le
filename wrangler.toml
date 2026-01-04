@@ -15,9 +15,10 @@ class_name = "ChatRoom"
 script_name = "main"
 
 # Durable Objects Migrations
+# Using new_sqlite_classes for free plan compatibility
 [[migrations]]
 tag = "v1"
-new_classes = ["ChatRoom"]
+new_sqlite_classes = ["ChatRoom"]
 
 # Workers AI Binding
 [ai]

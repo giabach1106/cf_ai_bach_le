@@ -55,3 +55,37 @@ Features:
 4.  Scroll to the bottom when new tokens stream in.
 
 Update `src/index.ts` to serve this static HTML file on the root route `/`.
+
+---
+
+I am encountering a deployment error with Cloudflare Workers:
+"[ERROR] In order to use Durable Objects with a free plan, you must create a namespace using a `new_sqlite_classes` migration. [code: 10097]"
+
+Please update my `wrangler.toml` to comply with the new Cloudflare Free Tier requirements.
+Action items:
+1. Change the migration configuration. Instead of `new_classes`, use `new_sqlite_classes = ["ChatRoom"]`.
+2. Ensure the `compatibility_date` is recent to support this feature.
+
+
+---
+
+My AI Assistant is behaving poorly:
+1. It answers "What is the date?" with "I" or hallucinations because it lacks context.
+2. The responses are cut off or too short.
+
+Please refactor the `handleAIRequest` method in `src/ChatRoom.ts`:
+1. Inject the current date/time into the system prompt message sent to the AI.
+   Example: "You are a helpful assistant. Current date: ${new Date().toISOString()}."
+2. Ensure we are correctly formatting the `messages` array passed to `env.AI.run`. It should include the system prompt first, followed by the user/assistant chat history.
+3. Ensure the array follows the standard format: `[{ role: 'system', content: ... }, { role: 'user', content: ... }]`.
+
+---
+
+I need a way to reset the conversation when testing.
+
+1. Update `src/ChatRoom.ts`: Handle a special command message. If the user sends a message with content `/reset`, the Durable Object should:
+   - Clear the `this.history` array in memory.
+   - Delete the storage using `this.ctx.storage.deleteAll()`.
+   - Broadcast a system message saying "Chat history has been cleared."
+
+2. Update `public/index.html`: Add a small "Trash Icon" or "Reset" button in the UI header. When clicked, it should send the `/reset` message via WebSocket.
