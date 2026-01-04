@@ -1,0 +1,29 @@
+# Cloudflare Workers Configuration
+# For more details: https://developers.cloudflare.com/workers/wrangler/configuration/
+
+name = "main"
+main = "src/index.ts"
+compatibility_date = "2026-01-03"
+
+[observability]
+enabled = true
+
+# Durable Objects Configuration
+[[durable_objects.bindings]]
+name = "CHAT_ROOM"
+class_name = "ChatRoom"
+script_name = "main"
+
+# Durable Objects Migrations
+[[migrations]]
+tag = "v1"
+new_classes = ["ChatRoom"]
+
+# Workers AI Binding
+[ai]
+binding = "AI"
+
+# Static Assets Configuration
+[assets]
+directory = "./public/"
+binding = "ASSETS"
