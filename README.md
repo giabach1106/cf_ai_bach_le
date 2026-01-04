@@ -88,12 +88,32 @@ AI: You like coffee! [AI remembers from context]
 1. Click the **🗑️ Clear Chat** button in the header
 2. Confirm the action
 3. All messages will be deleted for all users
-4. All vector embeddings will be removed from Vectorize
+4. All vector embeddings will be **completely removed** from Vectorize (including old untracked vectors)
 5. A system notification will announce the action
+
+**How Complete Cleanup Works:**
+- Queries Vectorize with a zero vector to find ALL existing vectors
+- Deletes all discovered vector IDs
+- Verifies deletion with a follow-up query
+- Logs remaining vectors if any are found
+- This ensures no "ghost" vectors remain from previous sessions
+
+### Change Your Username
+1. Simply type a new name in the left username input field
+2. Your next message will automatically use the new name
+3. No reconnection required - changes apply immediately
+4. Username is saved in localStorage for future sessions
 
 ## 🔧 Recent Updates
 
-### ✨ RAG Implementation (Latest)
+### 🎯 Production-Ready Fixes (Latest)
+- ✅ **Complete Vector Cleanup:** Query-all-then-delete approach ensures ALL vectors are removed
+- ✅ **Real-time Username Updates:** Username changes apply immediately without reconnection
+- ✅ **Session Isolation:** Per-user isolated chat rooms with unique room IDs
+- ✅ **Verification System:** Post-deletion verification to confirm complete cleanup
+- ✅ **Improved Logging:** Enhanced debug output for troubleshooting
+
+### ✨ RAG Implementation
 - ✅ Integrated Cloudflare Vectorize for semantic search
 - ✅ Automatic embedding generation for all user messages
 - ✅ Context retrieval using cosine similarity
@@ -113,6 +133,63 @@ AI: You like coffee! [AI remembers from context]
 - ✅ Includes confirmation dialog to prevent accidental deletion
 
 ## 📊 Architecture
+
+### Session Isolation Model
+
+**Current Implementation: Per-User Isolated Chat Rooms**
+
+Each browser session gets a unique room ID, creating isolated chat experiences:
+
+```
+User A (Browser 1)
+  ↓
+  Generates: room-abc123
+  ↓
+  Durable Object Instance #1
+  ↓
+  Isolated message history & vectors
+
+User B (Browser 2)
+  ↓
+  Generates: room-xyz789
+  ↓
+  Durable Object Instance #2
+  ↓
+  Separate isolated history & vectors
+```
+
+**How It Works:**
+1. On first visit, client generates a unique `roomId` using `crypto.randomUUID()`
+2. `roomId` is stored in `localStorage` for persistence across page refreshes
+3. WebSocket connects to `/api/chat?room={roomId}`
+4. Server creates Durable Object with `idFromName('room-{roomId}')`
+5. Each unique room ID = separate DO instance = isolated chat environment
+
+**Switching to Shared Global Chat:**
+
+To enable a shared chat room for all users, modify `public/index.html`:
+
+```javascript
+// Comment out these lines (around line 480):
+// if (!roomId) {
+//     roomId = crypto.randomUUID();
+//     localStorage.setItem('chat_room_id', roomId);
+// }
+
+// And set:
+roomId = 'default'; // All users share the same room
+```
+
+**Advantages of Current Model:**
+- ✅ Each user has private AI assistant with isolated RAG context
+- ✅ No cross-user data leakage
+- ✅ Scalable: DOs distributed across edge network
+- ✅ Perfect for personal AI assistant use case
+
+**When to Use Shared Model:**
+- Public chat rooms
+- Community discussions
+- Collaborative AI interactions
 
 ### RAG Pipeline
 ```
@@ -147,8 +224,8 @@ Stream response to user
 To see detailed RAG operation logs in the chat UI:
 
 1. Open `src/ChatRoom.ts`
-2. Find line ~270
-3. Change `const ENABLE_RAG_DEBUG = false;` to `true`
+2. Find line ~339 (look for `ENABLE_RAG_DEBUG`)
+3. Ensure it's set to `true` (default: enabled)
 4. Restart the dev server
 
 You'll see messages like:
@@ -156,6 +233,66 @@ You'll see messages like:
 - 🔎 Querying Vectorize...
 - 📝 Match results with similarity scores
 - ✅ Context usage confirmation
+
+### Verify Complete Vector Cleanup
+
+After clicking "Clear Chat", check the browser console for:
+
+```
+[RAG] Querying Vectorize to find all vectors...
+[RAG] Found X vectors in Vectorize
+[RAG] Deleting X vectors from Vectorize...
+[RAG] ✓ Successfully deleted X vectors
+[RAG] ✓ Verified: All vectors successfully deleted
+```
+
+If vectors remain, you'll see:
+```
+[RAG] ⚠️ Warning: N vectors still remain after deletion
+```
+
+### Check Your Room ID
+
+To see your current isolated room ID, open browser console:
+```javascript
+localStorage.getItem('chat_room_id')
+// Returns: "abc123..." (your unique room ID)
+```
+
+## 🚀 Deployment to Production
+
+1. **Deploy to Cloudflare Workers:**
+   ```bash
+   npm run deploy
+   ```
+
+2. **Verify Vectorize Index Exists:**
+   ```bash
+   npx wrangler vectorize list
+   # Should show: chat-index (768 dimensions, cosine)
+   ```
+
+3. **Test Production Deployment:**
+   - Each user automatically gets isolated room
+   - Test clearing chat to verify complete vector cleanup
+   - Change username mid-session to verify real-time updates
+
+## ⚠️ Important Notes
+
+### Vector Cleanup Limitations
+- Vectorize query has a max `topK` limit (~10,000 vectors)
+- If your room has >10,000 messages, some old vectors may remain
+- For production with high message volume, consider implementing pagination or periodic cleanup jobs
+
+### Username Updates
+- Username changes apply immediately for new messages
+- Old messages retain their original username (by design)
+- No retroactive username changes in history
+
+### Session Persistence
+- Room IDs are stored in `localStorage`
+- Clearing browser data = new isolated room created
+- To "reset" your chat: Clear `localStorage` or use incognito mode
 
 ## 🤖 AI Assistance
 See [PROMPTS.md](./PROMPTS.md) for the detailed engineering logs and prompts used to architect this solution.
