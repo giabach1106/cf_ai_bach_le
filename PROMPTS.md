@@ -162,3 +162,21 @@ Now implement the RAG logic in `src/ChatRoom.ts`.
 Username sent only once during WebSocket upgrade. No mechanism to update it dynamically.
 
 ---
+
+I want to integrate a GitHub repository summarization feature into my Cloudflare Workers AI project.
+
+**Goal:**
+When a user sends a GitHub link (e.g., `/analyze https://github.com/AsyncFuncAI/deepwiki-open`), the system should fetch the README, summarize it using Llama 3.3, and display the result in the chat.
+
+1.  Create a function `fetchGithubReadme(url: string)` that extracts the owner/repo from the URL and fetches the README content using the GitHub API (`https://api.github.com/repos/{owner}/{repo}/readme`). Remember to decode the base64 content.
+2.  Create a function `summarizeWithLlama(readmeContent: string)` that sends the content to `@cf/meta/llama-3.3-70b-instruct-fp8-fast`.
+3.  Use the following System Prompt for Llama 3.3:
+    [Insert the System Prompt from Section 1 above]
+4.  Integrate this into my `ChatRoom.ts` (or `ResearchWorkflow.ts` if using workflows) to handle the `/analyze` command.
+5.  Ensure the output is properly formatted Markdown for the frontend to render.
+
+* I am using Cloudflare Workers and Hono.
+* I have `env.AI` binding configured.
+* I need to handle potential errors (e.g., invalid URL, repo not found).
+
+Please generate the TypeScript code for these functions and show how to integrate them into the message handling logic.

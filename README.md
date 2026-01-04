@@ -6,6 +6,8 @@ EdgeMind is a serverless, real-time AI chat application built on the **Cloudflar
 
 * **🧠 Edge Intelligence:** Powered by **Llama 3.3 (FP8)** running directly on Cloudflare Workers AI.
 * **🔍 RAG Memory System:** Uses **Cloudflare Vectorize** and embeddings (@cf/baai/bge-base-en-v1.5) to give the AI long-term contextual memory.
+* **📦 GitHub Repository Analysis:** Analyze any GitHub repo with `/analyze` command - generates AI summaries with **interactive Mind Map** visualizations.
+* **📊 Mermaid Diagrams:** Full support for Mermaid diagrams with **fullscreen zoom**, pan, and **PNG download** capabilities.
 * **⚡ Real-time Streaming:** Zero-latency token streaming directly to WebSocket clients.
 * **💾 Stateful Architecture:** Uses **Durable Objects** to maintain chat history and state consistency across global edge locations.
 * **🎨 Modern UI:** A responsive, glassmorphism-inspired interface with Markdown rendering and auto-scroll.
@@ -84,6 +86,65 @@ User: @ai What do I like to drink?
 AI: You like coffee! [AI remembers from context]
 ```
 
+### 📦 Analyze GitHub Repositories (NEW!)
+Analyze any GitHub repository and get an AI-generated summary with an interactive Mind Map visualization!
+
+1. Use the `/analyze` command followed by a GitHub URL
+2. Example: `/analyze https://github.com/AsyncFuncAI/deepwiki-open`
+3. The AI will:
+   - Fetch the README from GitHub API
+   - Generate a **Mermaid Mind Map** showing project structure
+   - Provide a comprehensive summary with features, tech stack, and more
+
+**Supported URL formats:**
+```
+/analyze https://github.com/owner/repo
+/analyze github.com/owner/repo
+/analyze https://github.com/owner/repo.git
+```
+
+**Example Output:**
+```
+📦 Repository Analysis: owner/repo
+
+[Interactive Mind Map Diagram]
+   ┌─────────────┐
+   │  Project    │
+   │   Name      │
+   └──────┬──────┘
+          │
+    ┌─────┴─────┬─────────┬──────────┐
+    ▼           ▼         ▼          ▼
+ Features   Tech Stack  Setup    Notable
+    │           │         │          │
+   ...         ...       ...        ...
+
+🎯 Project Overview
+Brief description of the project...
+
+✨ Key Features
+• Feature 1: Description
+• Feature 2: Description
+
+🛠️ Tech Stack
+Languages, frameworks, tools...
+
+🚀 Getting Started
+Installation and usage...
+```
+
+### 🔍 Diagram Zoom & Export
+All Mermaid diagrams support interactive features:
+
+1. **Hover** over any diagram to reveal the zoom button (🔍)
+2. **Click** the zoom button to open fullscreen modal
+3. **Keyboard shortcuts** in fullscreen:
+   - `+` / `=` : Zoom in
+   - `-` : Zoom out
+   - `0` : Reset zoom
+   - `Esc` : Close modal
+4. **Download** diagrams as high-resolution PNG images
+
 ### Clear Chat History
 1. Click the **🗑️ Clear Chat** button in the header
 2. Confirm the action
@@ -106,7 +167,14 @@ AI: You like coffee! [AI remembers from context]
 
 ## 🔧 Recent Updates
 
-### 🎯 Production-Ready Fixes (Latest)
+### 📦 GitHub Repository Analysis (Latest)
+- ✅ **`/analyze` Command:** Analyze any GitHub repository with a single command
+- ✅ **AI Summarization:** Llama 3.3 generates comprehensive summaries from README files
+- ✅ **Mind Map Generation:** Automatic Mermaid mind map diagrams for visual project overview
+- ✅ **Interactive Diagrams:** Click-to-zoom, keyboard controls, and PNG export
+- ✅ **Error Handling:** Graceful handling of invalid URLs, missing READMEs, and rate limits
+
+### 🎯 Production-Ready Fixes
 - ✅ **Complete Vector Cleanup:** Query-all-then-delete approach ensures ALL vectors are removed
 - ✅ **Real-time Username Updates:** Username changes apply immediately without reconnection
 - ✅ **Session Isolation:** Per-user isolated chat rooms with unique room IDs

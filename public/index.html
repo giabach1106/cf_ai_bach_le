@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Chat Assistant - Cloudflare Workers</title>
     <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -327,6 +328,239 @@
             padding: 0;
         }
 
+        /* Mermaid Diagram Styles */
+        .mermaid-container {
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            border-radius: 12px;
+            padding: 20px;
+            margin: 16px 0;
+            overflow-x: auto;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            border: 1px solid #e2e8f0;
+        }
+
+        .mermaid-container svg {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .mermaid {
+            text-align: center;
+        }
+
+        /* Mind Map specific styles */
+        .mermaid .mindmap-node rect,
+        .mermaid .mindmap-node circle,
+        .mermaid .mindmap-node ellipse {
+            stroke-width: 2px;
+        }
+
+        /* Diagram loading state */
+        .mermaid-loading {
+            text-align: center;
+            padding: 20px;
+            color: #764ba2;
+            font-style: italic;
+        }
+
+        .mermaid-loading::after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            margin-left: 8px;
+            border: 2px solid #764ba2;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Diagram error state */
+        .mermaid-error {
+            background: #fff5f5;
+            border: 1px solid #fc8181;
+            border-radius: 8px;
+            padding: 12px;
+            color: #c53030;
+            font-size: 14px;
+        }
+
+        /* Zoom button on diagrams */
+        .mermaid-container {
+            position: relative;
+        }
+
+        .mermaid-zoom-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 36px;
+            height: 36px;
+            background: rgba(102, 126, 234, 0.9);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            opacity: 0;
+            z-index: 10;
+        }
+
+        .mermaid-container:hover .mermaid-zoom-btn {
+            opacity: 1;
+        }
+
+        .mermaid-zoom-btn:hover {
+            background: rgba(118, 75, 162, 1);
+            transform: scale(1.1);
+        }
+
+        /* Fullscreen Modal for Diagrams */
+        .diagram-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            backdrop-filter: blur(8px);
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        .diagram-modal-overlay.show {
+            display: flex;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .diagram-modal {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 95vw;
+            max-height: 95vh;
+            overflow: auto;
+            position: relative;
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5);
+            animation: zoomIn 0.3s ease-out;
+        }
+
+        @keyframes zoomIn {
+            from {
+                opacity: 0;
+                transform: scale(0.8);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .diagram-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .diagram-modal-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .diagram-modal-close {
+            width: 40px;
+            height: 40px;
+            background: #f1f5f9;
+            border: none;
+            border-radius: 8px;
+            font-size: 24px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            color: #64748b;
+        }
+
+        .diagram-modal-close:hover {
+            background: #e2e8f0;
+            color: #334155;
+        }
+
+        .diagram-modal-content {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-width: 400px;
+            min-height: 300px;
+        }
+
+        .diagram-modal-content svg {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .diagram-modal-controls {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .diagram-control-btn {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+
+        .diagram-control-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .diagram-control-btn.secondary {
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        .diagram-control-btn.secondary:hover {
+            background: #e2e8f0;
+            box-shadow: none;
+        }
+
         .ai-thinking {
             display: inline-flex;
             align-items: center;
@@ -471,9 +705,50 @@
 
         .help-text {
             font-size: 12px;
-            color: #999;
+            color: #666;
             text-align: center;
             margin-top: 8px;
+            padding: 8px 16px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .command-hint {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf4 100%);
+            border-radius: 6px;
+            transition: all 0.2s;
+            cursor: default;
+        }
+
+        .command-hint:hover {
+            background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
+            transform: translateY(-1px);
+        }
+
+        .command-hint .cmd {
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-weight: 600;
+            color: #667eea;
+            background: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+
+        .command-hint .desc {
+            color: #555;
+            font-size: 11px;
+        }
+
+        .command-hint .icon {
+            font-size: 14px;
         }
 
         /* Scrollbar styling */
@@ -521,14 +796,23 @@
                 type="text" 
                 id="messageInput" 
                 class="message-input" 
-                placeholder="Type a message... (use @ai to ask AI)" 
+                placeholder="Type @ai + question or /analyze + GitHub URL..." 
                 disabled
             />
             <button id="micButton" class="mic-button" title="Voice Input" disabled>🎤</button>
             <button id="sendButton" class="send-button" disabled>Send</button>
         </div>
         <div class="help-text">
-            💡 Tip: Start your message with <strong>@ai</strong> to ask the AI assistant!
+            <div class="command-hint" title="Ask AI anything with context memory">
+                <span class="icon">🤖</span>
+                <span class="cmd">@ai</span>
+                <span class="desc">Ask AI with memory</span>
+            </div>
+            <div class="command-hint" title="Analyze GitHub repository and generate Mind Map">
+                <span class="icon">📦</span>
+                <span class="cmd">/analyze</span>
+                <span class="desc">GitHub repo → Mind Map</span>
+            </div>
         </div>
     </div>
 
@@ -545,7 +829,240 @@
         </div>
     </div>
 
+    <!-- Diagram Fullscreen Modal -->
+    <div class="diagram-modal-overlay" id="diagramModalOverlay">
+        <div class="diagram-modal">
+            <div class="diagram-modal-header">
+                <div class="diagram-modal-title">
+                    <span>📊</span>
+                    <span id="diagramModalTitle">Mind Map</span>
+                </div>
+                <button class="diagram-modal-close" id="diagramModalClose" title="Close (Esc)">×</button>
+            </div>
+            <div class="diagram-modal-content" id="diagramModalContent"></div>
+            <div class="diagram-modal-controls">
+                <button class="diagram-control-btn secondary" id="diagramZoomOut" title="Zoom Out">🔍- Zoom Out</button>
+                <button class="diagram-control-btn secondary" id="diagramZoomReset" title="Reset Zoom">↺ Reset</button>
+                <button class="diagram-control-btn secondary" id="diagramZoomIn" title="Zoom In">🔍+ Zoom In</button>
+                <button class="diagram-control-btn" id="diagramDownload" title="Download as PNG">💾 Download</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // Initialize Mermaid
+        mermaid.initialize({
+            startOnLoad: false,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: '#667eea',
+                primaryTextColor: '#fff',
+                primaryBorderColor: '#764ba2',
+                lineColor: '#764ba2',
+                secondaryColor: '#f5f7fa',
+                tertiaryColor: '#e8ecf4',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                fontSize: '14px'
+            },
+            mindmap: {
+                useMaxWidth: true,
+                padding: 20
+            },
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            },
+            securityLevel: 'loose'
+        });
+
+        // Process Mermaid diagrams in content
+        async function processMermaidDiagrams(container) {
+            // Find all code blocks that contain mermaid
+            const codeBlocks = container.querySelectorAll('pre code');
+            
+            for (const codeBlock of codeBlocks) {
+                const code = codeBlock.textContent.trim();
+                
+                // Check if it's a mermaid diagram
+                if (code.startsWith('mindmap') || 
+                    code.startsWith('graph') || 
+                    code.startsWith('flowchart') ||
+                    code.startsWith('sequenceDiagram') ||
+                    code.startsWith('classDiagram') ||
+                    code.startsWith('stateDiagram') ||
+                    code.startsWith('erDiagram') ||
+                    code.startsWith('pie') ||
+                    code.startsWith('gantt')) {
+                    
+                    const pre = codeBlock.parentElement;
+                    const mermaidContainer = document.createElement('div');
+                    mermaidContainer.className = 'mermaid-container';
+                    
+                    // Add zoom button
+                    const zoomBtn = document.createElement('button');
+                    zoomBtn.className = 'mermaid-zoom-btn';
+                    zoomBtn.innerHTML = '🔍';
+                    zoomBtn.title = 'Phóng to / Fullscreen';
+                    mermaidContainer.appendChild(zoomBtn);
+                    
+                    const mermaidDiv = document.createElement('div');
+                    mermaidDiv.className = 'mermaid';
+                    mermaidDiv.textContent = code;
+                    mermaidContainer.appendChild(mermaidDiv);
+                    
+                    // Replace the pre/code block with mermaid container
+                    pre.replaceWith(mermaidContainer);
+                    
+                    try {
+                        // Render the mermaid diagram
+                        const { svg } = await mermaid.render('mermaid-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9), code);
+                        mermaidDiv.innerHTML = svg;
+                        
+                        // Determine diagram type for modal title
+                        let diagramType = 'Diagram';
+                        if (code.startsWith('mindmap')) diagramType = 'Mind Map';
+                        else if (code.startsWith('flowchart') || code.startsWith('graph')) diagramType = 'Flowchart';
+                        else if (code.startsWith('sequenceDiagram')) diagramType = 'Sequence Diagram';
+                        else if (code.startsWith('classDiagram')) diagramType = 'Class Diagram';
+                        else if (code.startsWith('pie')) diagramType = 'Pie Chart';
+                        else if (code.startsWith('gantt')) diagramType = 'Gantt Chart';
+                        
+                        // Add click handler for zoom
+                        zoomBtn.addEventListener('click', () => {
+                            openDiagramModal(svg, diagramType);
+                        });
+                    } catch (error) {
+                        console.error('Mermaid rendering error:', error);
+                        mermaidDiv.innerHTML = `<div class="mermaid-error">⚠️ Diagram rendering failed: ${error.message || 'Unknown error'}</div>`;
+                        zoomBtn.style.display = 'none';
+                    }
+                }
+            }
+        }
+
+        // Diagram Modal State
+        let currentDiagramSvg = '';
+        let currentZoomLevel = 1;
+
+        // Open diagram in fullscreen modal
+        function openDiagramModal(svgContent, title) {
+            currentDiagramSvg = svgContent;
+            currentZoomLevel = 1;
+            
+            const overlay = document.getElementById('diagramModalOverlay');
+            const content = document.getElementById('diagramModalContent');
+            const titleEl = document.getElementById('diagramModalTitle');
+            
+            titleEl.textContent = title;
+            content.innerHTML = `<div class="diagram-zoom-wrapper" style="transform: scale(1); transition: transform 0.2s;">${svgContent}</div>`;
+            overlay.classList.add('show');
+            
+            // Focus for keyboard events
+            overlay.focus();
+        }
+
+        // Close diagram modal
+        function closeDiagramModal() {
+            const overlay = document.getElementById('diagramModalOverlay');
+            overlay.classList.remove('show');
+            currentDiagramSvg = '';
+            currentZoomLevel = 1;
+        }
+
+        // Zoom diagram
+        function zoomDiagram(delta) {
+            currentZoomLevel = Math.max(0.5, Math.min(3, currentZoomLevel + delta));
+            const wrapper = document.querySelector('.diagram-zoom-wrapper');
+            if (wrapper) {
+                wrapper.style.transform = `scale(${currentZoomLevel})`;
+            }
+        }
+
+        // Reset zoom
+        function resetZoom() {
+            currentZoomLevel = 1;
+            const wrapper = document.querySelector('.diagram-zoom-wrapper');
+            if (wrapper) {
+                wrapper.style.transform = 'scale(1)';
+            }
+        }
+
+        // Download diagram as PNG
+        async function downloadDiagram() {
+            if (!currentDiagramSvg) return;
+            
+            try {
+                // Create a canvas to convert SVG to PNG
+                const svgBlob = new Blob([currentDiagramSvg], { type: 'image/svg+xml' });
+                const url = URL.createObjectURL(svgBlob);
+                
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const scale = 2; // Higher resolution
+                    canvas.width = img.width * scale;
+                    canvas.height = img.height * scale;
+                    
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = 'white';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.scale(scale, scale);
+                    ctx.drawImage(img, 0, 0);
+                    
+                    // Download
+                    const link = document.createElement('a');
+                    link.download = `diagram-${Date.now()}.png`;
+                    link.href = canvas.toDataURL('image/png');
+                    link.click();
+                    
+                    URL.revokeObjectURL(url);
+                };
+                img.src = url;
+            } catch (error) {
+                console.error('Error downloading diagram:', error);
+                alert('Failed to download diagram. Please try again.');
+            }
+        }
+
+        // Diagram modal event listeners (will be initialized after DOM ready)
+        function initDiagramModalEvents() {
+            const overlay = document.getElementById('diagramModalOverlay');
+            const closeBtn = document.getElementById('diagramModalClose');
+            const zoomInBtn = document.getElementById('diagramZoomIn');
+            const zoomOutBtn = document.getElementById('diagramZoomOut');
+            const zoomResetBtn = document.getElementById('diagramZoomReset');
+            const downloadBtn = document.getElementById('diagramDownload');
+            
+            closeBtn.addEventListener('click', closeDiagramModal);
+            zoomInBtn.addEventListener('click', () => zoomDiagram(0.25));
+            zoomOutBtn.addEventListener('click', () => zoomDiagram(-0.25));
+            zoomResetBtn.addEventListener('click', resetZoom);
+            downloadBtn.addEventListener('click', downloadDiagram);
+            
+            // Close on overlay click
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    closeDiagramModal();
+                }
+            });
+            
+            // Keyboard shortcuts
+            document.addEventListener('keydown', (e) => {
+                if (!overlay.classList.contains('show')) return;
+                
+                if (e.key === 'Escape') {
+                    closeDiagramModal();
+                } else if (e.key === '+' || e.key === '=') {
+                    zoomDiagram(0.25);
+                } else if (e.key === '-') {
+                    zoomDiagram(-0.25);
+                } else if (e.key === '0') {
+                    resetZoom();
+                }
+            });
+        }
+
         // Configuration
         const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const WS_HOST = window.location.host;
@@ -878,7 +1395,7 @@
         }
 
         // Display a chat message
-        function displayMessage(message) {
+        async function displayMessage(message) {
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message';
             
@@ -902,6 +1419,11 @@
             `;
 
             messagesContainer.appendChild(messageDiv);
+            
+            // Process Mermaid diagrams
+            const contentDiv = messageDiv.querySelector('.message-content');
+            await processMermaidDiagrams(contentDiv);
+            
             scrollToBottom();
         }
 
@@ -949,9 +1471,14 @@
         }
 
         // Complete AI message
-        function completeAIMessage(messageId) {
+        async function completeAIMessage(messageId) {
             const aiMsg = aiMessages.get(messageId);
             if (aiMsg) {
+                // Process Mermaid diagrams now that streaming is complete
+                const contentDiv = aiMsg.element.querySelector('.message-content');
+                await processMermaidDiagrams(contentDiv);
+                scrollToBottom();
+                
                 // Speak the AI response if TTS is enabled
                 if (ttsEnabled && aiMsg.content) {
                     speakText(aiMsg.content);
@@ -1189,6 +1716,9 @@
                 }
             }
         });
+
+        // Initialize diagram modal events
+        initDiagramModalEvents();
 
         // Initialize connection
         connect();

@@ -16,6 +16,182 @@ interface ChatMessage {
 	timestamp: number;
 }
 
+// GitHub README response structure
+interface GitHubReadmeResponse {
+	content: string;
+	encoding: string;
+	name: string;
+	path: string;
+	sha: string;
+	size: number;
+	url: string;
+	html_url: string;
+}
+
+// GitHub API error response
+interface GitHubErrorResponse {
+	message: string;
+	documentation_url?: string;
+}
+
+/**
+ * Extracts owner and repo from a GitHub URL
+ * Supports formats like:
+ * - https://github.com/owner/repo
+ * - https://github.com/owner/repo.git
+ * - https://github.com/owner/repo/tree/branch
+ * - github.com/owner/repo
+ */
+function parseGithubUrl(url: string): { owner: string; repo: string } | null {
+	try {
+		// Clean up the URL
+		let cleanUrl = url.trim();
+		
+		// Add protocol if missing
+		if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+			cleanUrl = 'https://' + cleanUrl;
+		}
+		
+		const urlObj = new URL(cleanUrl);
+		
+		// Check if it's a GitHub URL
+		if (!urlObj.hostname.includes('github.com')) {
+			return null;
+		}
+		
+		// Extract path parts
+		const pathParts = urlObj.pathname.split('/').filter(Boolean);
+		
+		if (pathParts.length < 2) {
+			return null;
+		}
+		
+		const owner = pathParts[0];
+		// Remove .git suffix if present
+		const repo = pathParts[1].replace(/\.git$/, '');
+		
+		return { owner, repo };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Fetches the README content from a GitHub repository
+ * Uses the GitHub API to retrieve and decode the README file
+ */
+async function fetchGithubReadme(url: string): Promise<{ content: string; repoName: string } | { error: string }> {
+	const parsed = parseGithubUrl(url);
+	
+	if (!parsed) {
+		return { error: 'Invalid GitHub URL. Please use a format like: https://github.com/owner/repo' };
+	}
+	
+	const { owner, repo } = parsed;
+	const apiUrl = `https://api.github.com/repos/${owner}/${repo}/readme`;
+	
+	try {
+		const response = await fetch(apiUrl, {
+			headers: {
+				'Accept': 'application/vnd.github.v3+json',
+				'User-Agent': 'Cloudflare-Worker-GitHub-Summarizer',
+			},
+		});
+		
+		if (!response.ok) {
+			if (response.status === 404) {
+				return { error: `Repository "${owner}/${repo}" not found or has no README file.` };
+			}
+			if (response.status === 403) {
+				return { error: 'GitHub API rate limit exceeded. Please try again later.' };
+			}
+			const errorData = await response.json() as GitHubErrorResponse;
+			return { error: `GitHub API error: ${errorData.message || response.statusText}` };
+		}
+		
+		const data = await response.json() as GitHubReadmeResponse;
+		
+		// Decode base64 content
+		if (data.encoding !== 'base64') {
+			return { error: `Unexpected encoding: ${data.encoding}` };
+		}
+		
+		// Decode base64 to text
+		const decodedContent = atob(data.content.replace(/\n/g, ''));
+		
+		return { 
+			content: decodedContent,
+			repoName: `${owner}/${repo}`,
+		};
+	} catch (error) {
+		const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+		return { error: `Failed to fetch README: ${errorMsg}` };
+	}
+}
+
+/**
+ * System prompt for GitHub repository summarization with Mind Map
+ */
+const GITHUB_SUMMARIZER_SYSTEM_PROMPT = `You are an expert technical documentation summarizer. Your task is to analyze GitHub repository README files and provide clear, structured summaries WITH a visual mind map diagram.
+
+## CRITICAL: You MUST include a Mermaid mind map diagram at the START of your response!
+
+## Mind Map Format (REQUIRED):
+Always start your response with a Mermaid mindmap diagram using this EXACT format:
+
+\`\`\`
+mindmap
+  root((Project Name))
+    Features
+      Feature 1
+      Feature 2
+      Feature 3
+    Tech Stack
+      Language/Framework
+      Database
+      Tools
+    Architecture
+      Component 1
+      Component 2
+    Getting Started
+      Installation
+      Usage
+\`\`\`
+
+## Mind Map Rules:
+- Use \`root((Name))\` for the center node (double parentheses for circle)
+- Use 2-space indentation for each level
+- Keep node text SHORT (1-4 words max)
+- Include 4-6 main branches
+- Each branch should have 2-4 child nodes
+- DO NOT use special characters like colons, quotes, or brackets in node text
+- DO NOT use markdown formatting inside the mindmap
+
+## After the Mind Map, include:
+
+### 🎯 Project Overview
+1-2 sentence description of what the project does.
+
+### ✨ Key Features
+- Feature 1: Brief description
+- Feature 2: Brief description
+- Feature 3: Brief description
+
+### 🛠️ Tech Stack
+List the main technologies, frameworks, and languages.
+
+### 🚀 Getting Started
+Brief installation/usage instructions.
+
+### 💡 Notable Points
+Any unique aspects or important notes.
+
+## Important:
+- The mind map MUST be the first thing in your response
+- Keep the summary concise (200-400 words after the diagram)
+- Use emojis for section headers
+- Be accurate - only include information from the README`;
+
 // WebSocket session wrapper
 interface Session {
 	webSocket: WebSocket;
@@ -148,6 +324,26 @@ export class ChatRoom extends DurableObject {
 
 		// Broadcast to all connected sessions (including sender)
 		await this.broadcastMessage(message);
+
+			// Check if this is a GitHub analyze command
+			if (message.content.trim().startsWith('/analyze')) {
+				// Extract the URL (remove "/analyze" prefix)
+				const url = message.content.trim().substring(8).trim();
+				
+				if (url) {
+					// Trigger GitHub analysis with streaming
+					await this.handleGithubAnalyze(url, session);
+				} else {
+					// Send error if no URL provided
+					session.webSocket.send(
+						JSON.stringify({
+							type: 'error',
+							message: 'Please provide a GitHub URL after /analyze. Example: /analyze https://github.com/owner/repo',
+						})
+					);
+				}
+				return; // Don't process as regular AI request
+			}
 
 			// Check if this is an AI trigger message
 			if (message.content.trim().startsWith('@ai')) {
@@ -351,7 +547,7 @@ export class ChatRoom extends DurableObject {
 
 			// Send debug info to the requesting user (only if needed for debugging)
 			// Set to true to enable RAG debug messages in chat
-			const ENABLE_RAG_DEBUG = true;
+			const ENABLE_RAG_DEBUG = false;
 			
 			if (ENABLE_RAG_DEBUG && debugInfo.length > 0) {
 				try {
@@ -518,6 +714,192 @@ export class ChatRoom extends DurableObject {
 				timestamp: Date.now(),
 			};
 			await this.addMessageToHistory(aiErrorMessage);
+		}
+	}
+
+	/**
+	 * Handles GitHub repository analysis with streaming response
+	 * Fetches the README, summarizes it with Llama 3.3, and streams the result
+	 */
+	private async handleGithubAnalyze(url: string, requestingSession: Session): Promise<void> {
+		const analyzeMessageId = crypto.randomUUID();
+		let fullResponse = '';
+
+		try {
+			// Notify all users that analysis is starting
+			const analyzingNotification = JSON.stringify({
+				type: 'ai_thinking',
+				messageId: analyzeMessageId,
+			});
+
+			for (const session of this.sessions) {
+				try {
+					session.webSocket.send(analyzingNotification);
+				} catch (error) {
+					console.error('Error sending analyzing notification:', error);
+				}
+			}
+
+			// Step 1: Fetch the README from GitHub
+			console.log(`[GitHub] Fetching README for: ${url}`);
+			const readmeResult = await fetchGithubReadme(url);
+
+			// Check for errors
+			if ('error' in readmeResult) {
+				throw new Error(readmeResult.error);
+			}
+
+			const { content: readmeContent, repoName } = readmeResult;
+			console.log(`[GitHub] Successfully fetched README for ${repoName} (${readmeContent.length} chars)`);
+
+			// Truncate README if too long (to fit within context window)
+			const maxReadmeLength = 15000; // ~4000 tokens
+			const truncatedReadme = readmeContent.length > maxReadmeLength
+				? readmeContent.substring(0, maxReadmeLength) + '\n\n[... README truncated due to length ...]'
+				: readmeContent;
+
+			// Step 2: Summarize with Llama 3.3
+			console.log(`[GitHub] Starting summarization for ${repoName}...`);
+
+			const response = await this.env.AI.run(
+				'@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+				{
+					messages: [
+						{
+							role: 'system',
+							content: GITHUB_SUMMARIZER_SYSTEM_PROMPT,
+						},
+						{
+							role: 'user',
+							content: `Please analyze and summarize the following GitHub repository README:\n\n**Repository:** ${repoName}\n\n---\n\n${truncatedReadme}`,
+						},
+					],
+					max_tokens: 3000, // Ensure complete response for mindmap + detailed summary
+					stream: true,
+				}
+			);
+
+			// Process the streaming response
+			const decoder = new TextDecoder();
+			let buffer = '';
+
+			// Add header to response
+			const headerContent = `## 📦 Repository Analysis: [${repoName}](${url})\n\n`;
+			fullResponse = headerContent;
+
+			// Send header immediately
+			const headerChunk = JSON.stringify({
+				type: 'ai_stream',
+				messageId: analyzeMessageId,
+				chunk: headerContent,
+			});
+
+			for (const session of this.sessions) {
+				try {
+					session.webSocket.send(headerChunk);
+				} catch (error) {
+					console.error('Error sending header chunk:', error);
+				}
+			}
+
+			for await (const chunk of response as AsyncIterable<Uint8Array>) {
+				const text = decoder.decode(chunk, { stream: true });
+				buffer += text;
+
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || '';
+
+				for (const line of lines) {
+					if (line.startsWith('data: ')) {
+						const jsonStr = line.substring(6).trim();
+
+						if (jsonStr === '[DONE]') {
+							continue;
+						}
+
+						try {
+							const data = JSON.parse(jsonStr);
+
+							if (data.response) {
+								const content = data.response;
+								fullResponse += content;
+
+								const streamChunk = JSON.stringify({
+									type: 'ai_stream',
+									messageId: analyzeMessageId,
+									chunk: content,
+								});
+
+								for (const session of this.sessions) {
+									try {
+										session.webSocket.send(streamChunk);
+									} catch (error) {
+										console.error('Error sending stream chunk:', error);
+										this.sessions.delete(session);
+									}
+								}
+							}
+						} catch (parseError) {
+							console.error('Error parsing JSON:', parseError, 'Line:', jsonStr);
+						}
+					}
+				}
+			}
+
+			// Send completion signal
+			const completionSignal = JSON.stringify({
+				type: 'ai_complete',
+				messageId: analyzeMessageId,
+			});
+
+			for (const session of this.sessions) {
+				try {
+					session.webSocket.send(completionSignal);
+				} catch (error) {
+					console.error('Error sending completion signal:', error);
+				}
+			}
+
+			// Store the complete analysis in history
+			if (fullResponse) {
+				const analysisMessage: ChatMessage = {
+					id: analyzeMessageId,
+					username: 'AI Assistant',
+					content: fullResponse,
+					timestamp: Date.now(),
+				};
+				await this.addMessageToHistory(analysisMessage);
+				console.log(`[GitHub] Analysis complete for ${repoName}`);
+			}
+
+		} catch (error) {
+			console.error('Error during GitHub analysis:', error);
+
+			const errorContent = error instanceof Error ? error.message : 'Unknown error occurred';
+
+			// Send error to all clients
+			const errorMessage = JSON.stringify({
+				type: 'ai_error',
+				messageId: analyzeMessageId,
+				message: `GitHub analysis failed: ${errorContent}`,
+			});
+
+			for (const session of this.sessions) {
+				try {
+					session.webSocket.send(errorMessage);
+				} catch (sendError) {
+					console.error('Error sending error message:', sendError);
+				}
+			}
+
+			// Store error message in history
+			const errorHistoryMessage: ChatMessage = {
+				id: analyzeMessageId,
+				username: 'AI Assistant',
+				content: `❌ **GitHub Analysis Error**\n\n${errorContent}`,
+				timestamp: Date.now(),
+			};
+			await this.addMessageToHistory(errorHistoryMessage);
 		}
 	}
 
