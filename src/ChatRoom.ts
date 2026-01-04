@@ -103,6 +103,34 @@ export class ChatRoom extends DurableObject {
 			// Parse incoming message
 			const data = JSON.parse(messageData);
 
+			// Check for special commands
+			if (data.type === 'clear_history') {
+				await this.clearHistory();
+				
+				// Notify all users that history was cleared
+				const clearNotification = JSON.stringify({
+					type: 'history_cleared',
+				});
+				
+				for (const s of this.sessions) {
+					try {
+						s.webSocket.send(clearNotification);
+					} catch (error) {
+						console.error('Error sending clear notification:', error);
+					}
+				}
+				
+				// Broadcast system message
+				const systemMessage: ChatMessage = {
+					id: crypto.randomUUID(),
+					username: 'System',
+					content: `${session.username} cleared the chat history`,
+					timestamp: Date.now(),
+				};
+				await this.broadcastMessage(systemMessage);
+				return;
+			}
+
 			// Create chat message
 			const message: ChatMessage = {
 				id: crypto.randomUUID(),
@@ -169,7 +197,7 @@ export class ChatRoom extends DurableObject {
 			}
 
 			// Call Workers AI with Llama 3.3 model with streaming enabled
-			const response = await this.env.AI.run(
+			const stream = await this.env.AI.run(
 				'@cf/meta/llama-3.3-70b-instruct-fp8-fast',
 				{
 					messages: [
@@ -187,54 +215,28 @@ export class ChatRoom extends DurableObject {
 			);
 
 			// Process the streaming response
-			const reader = response.getReader();
-			const decoder = new TextDecoder();
+			// Workers AI returns a ReadableStream with chunks containing the response text
+			let buffer = '';
+			
+			for await (const chunk of stream) {
+				// Each chunk is an object with a 'response' field containing the text
+				if (chunk.response) {
+					const content = chunk.response;
+					fullResponse += content;
 
-			while (true) {
-				const { done, value } = await reader.read();
+					// Send the chunk immediately to all connected clients
+					const streamChunk = JSON.stringify({
+						type: 'ai_stream',
+						messageId: aiMessageId,
+						chunk: content,
+					});
 
-				if (done) {
-					break;
-				}
-
-				// Decode the chunk
-				const chunk = decoder.decode(value, { stream: true });
-				
-				// Parse the SSE format (data: {...}\n\n)
-				const lines = chunk.split('\n');
-				for (const line of lines) {
-					if (line.startsWith('data: ')) {
+					for (const session of this.sessions) {
 						try {
-							const jsonStr = line.substring(6);
-							if (jsonStr.trim() === '[DONE]') {
-								continue;
-							}
-
-							const data = JSON.parse(jsonStr);
-							const content = data.response || '';
-
-							if (content) {
-								fullResponse += content;
-
-								// Send the chunk immediately to all connected clients
-								const streamChunk = JSON.stringify({
-									type: 'ai_stream',
-									messageId: aiMessageId,
-									chunk: content,
-								});
-
-								for (const session of this.sessions) {
-									try {
-										session.webSocket.send(streamChunk);
-									} catch (error) {
-										console.error('Error sending stream chunk:', error);
-										this.sessions.delete(session);
-									}
-								}
-							}
-						} catch (parseError) {
-							// Skip invalid JSON lines
-							console.error('Error parsing SSE line:', parseError);
+							session.webSocket.send(streamChunk);
+						} catch (error) {
+							console.error('Error sending stream chunk:', error);
+							this.sessions.delete(session);
 						}
 					}
 				}
@@ -323,6 +325,13 @@ export class ChatRoom extends DurableObject {
 			console.error('Error parsing history:', error);
 			return [];
 		}
+	}
+
+	/**
+	 * Clears all message history from storage
+	 */
+	private async clearHistory(): Promise<void> {
+		await this.ctx.storage.delete(this.HISTORY_KEY);
 	}
 
 	/**
