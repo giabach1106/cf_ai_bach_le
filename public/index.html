@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Chat Room - Cloudflare Workers</title>
+    <title>AI Chat Assistant - Cloudflare Workers</title>
     <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
     <style>
         * {
@@ -78,6 +78,127 @@
             opacity: 0.5;
             cursor: not-allowed;
             transform: none;
+        }
+
+        .clear-button.clearing {
+            background: rgba(255, 193, 7, 0.3);
+            border-color: rgba(255, 193, 7, 0.5);
+            animation: pulse-clear 1.5s infinite;
+        }
+
+        @keyframes pulse-clear {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        /* Cleanup Modal/Overlay */
+        .cleanup-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            backdrop-filter: blur(4px);
+        }
+
+        .cleanup-overlay.show {
+            display: flex;
+        }
+
+        .cleanup-modal {
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: modalSlideIn 0.3s ease-out;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px) scale(0.95);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .cleanup-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .cleanup-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+        }
+
+        .cleanup-message {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .cleanup-progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .cleanup-progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .cleanup-status {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .tts-toggle {
+            padding: 6px 14px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .tts-toggle:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-1px);
+        }
+
+        .tts-toggle:active {
+            transform: translateY(0);
+        }
+
+        .tts-toggle.enabled {
+            background: rgba(76, 175, 80, 0.3);
+            border-color: rgba(76, 175, 80, 0.5);
         }
 
         .connection-status {
@@ -246,20 +367,6 @@
             gap: 12px;
         }
 
-        .username-input {
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 12px;
-            font-size: 14px;
-            width: 150px;
-            transition: border-color 0.3s;
-        }
-
-        .username-input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
         .message-input {
             flex: 1;
             padding: 12px 16px;
@@ -299,6 +406,54 @@
             opacity: 0.5;
             cursor: not-allowed;
             transform: none;
+        }
+
+        .mic-button {
+            padding: 12px;
+            background: rgba(102, 126, 234, 0.1);
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 48px;
+        }
+
+        .mic-button:hover {
+            background: rgba(102, 126, 234, 0.2);
+            border-color: #667eea;
+            transform: translateY(-2px);
+        }
+
+        .mic-button:active {
+            transform: translateY(0);
+        }
+
+        .mic-button.listening {
+            background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+            border-color: #ff4444;
+            color: white;
+            animation: pulse-mic 1.5s infinite;
+        }
+
+        .mic-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        @keyframes pulse-mic {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(255, 68, 68, 0.7);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 10px rgba(255, 68, 68, 0);
+            }
         }
 
         .error-banner {
@@ -343,8 +498,12 @@
 <body>
     <div class="chat-container">
         <div class="chat-header">
-            <span>AI Chat Room</span>
+            <span>🤖 AI Chat Assistant</span>
             <div class="header-actions">
+                <button id="ttsToggle" class="tts-toggle" title="Toggle Text-to-Speech">
+                    <span id="ttsIcon">🔇</span>
+                    <span id="ttsLabel">Off</span>
+                </button>
                 <button id="clearButton" class="clear-button" disabled>🗑️ Clear Chat</button>
                 <div class="connection-status">
                     <span class="status-dot" id="statusDot"></span>
@@ -360,22 +519,29 @@
         <div class="input-container">
             <input 
                 type="text" 
-                id="usernameInput" 
-                class="username-input" 
-                placeholder="Your name" 
-                maxlength="20"
-            />
-            <input 
-                type="text" 
                 id="messageInput" 
                 class="message-input" 
                 placeholder="Type a message... (use @ai to ask AI)" 
                 disabled
             />
+            <button id="micButton" class="mic-button" title="Voice Input" disabled>🎤</button>
             <button id="sendButton" class="send-button" disabled>Send</button>
         </div>
         <div class="help-text">
-            💡 Tip: Start your message with <strong>@ai</strong> to ask the AI assistant anything!
+            💡 Tip: Start your message with <strong>@ai</strong> to ask the AI assistant!
+        </div>
+    </div>
+
+    <!-- Cleanup Progress Overlay -->
+    <div class="cleanup-overlay" id="cleanupOverlay">
+        <div class="cleanup-modal">
+            <div class="cleanup-icon" id="cleanupIcon">🗑️</div>
+            <div class="cleanup-title" id="cleanupTitle">Clearing Chat History</div>
+            <div class="cleanup-message" id="cleanupMessage">Please wait...</div>
+            <div class="cleanup-progress-bar">
+                <div class="cleanup-progress-fill" id="cleanupProgressFill"></div>
+            </div>
+            <div class="cleanup-status" id="cleanupStatus">0%</div>
         </div>
     </div>
 
@@ -386,33 +552,166 @@
         
         // State
         let ws = null;
-        let username = localStorage.getItem('chat_username') || '';
+        let roomId = localStorage.getItem('chat_room_id') || '';
         let aiMessages = new Map(); // Track streaming AI messages
         let reconnectAttempts = 0;
         const MAX_RECONNECT_ATTEMPTS = 5;
 
+        // Session Isolation: Generate unique room ID per browser session
+        // This creates isolated chat rooms for each user
+        if (!roomId) {
+            roomId = crypto.randomUUID();
+            localStorage.setItem('chat_room_id', roomId);
+            console.log(`Created new isolated room: ${roomId}`);
+        }
+        
+        // Voice interaction state
+        let ttsEnabled = localStorage.getItem('tts_enabled') === 'true';
+        let recognition = null;
+        let isListening = false;
+        let speechRetryCount = 0;
+        const MAX_SPEECH_RETRIES = 2;
+
         // DOM Elements
         const messagesContainer = document.getElementById('messagesContainer');
         const messageInput = document.getElementById('messageInput');
-        const usernameInput = document.getElementById('usernameInput');
         const sendButton = document.getElementById('sendButton');
         const clearButton = document.getElementById('clearButton');
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
         const errorBanner = document.getElementById('errorBanner');
+        const ttsToggle = document.getElementById('ttsToggle');
+        const ttsIcon = document.getElementById('ttsIcon');
+        const ttsLabel = document.getElementById('ttsLabel');
+        const micButton = document.getElementById('micButton');
+        
+        // Cleanup modal elements
+        const cleanupOverlay = document.getElementById('cleanupOverlay');
+        const cleanupIcon = document.getElementById('cleanupIcon');
+        const cleanupTitle = document.getElementById('cleanupTitle');
+        const cleanupMessage = document.getElementById('cleanupMessage');
+        const cleanupProgressFill = document.getElementById('cleanupProgressFill');
+        const cleanupStatus = document.getElementById('cleanupStatus');
 
-        // Initialize username input
-        usernameInput.value = username;
+        // Initialize TTS toggle UI
+        function updateTTSUI() {
+            if (ttsEnabled) {
+                ttsIcon.textContent = '🔊';
+                ttsLabel.textContent = 'On';
+                ttsToggle.classList.add('enabled');
+            } else {
+                ttsIcon.textContent = '🔇';
+                ttsLabel.textContent = 'Off';
+                ttsToggle.classList.remove('enabled');
+            }
+        }
+        updateTTSUI();
 
-        // Save username on change
-        usernameInput.addEventListener('input', (e) => {
-            username = e.target.value.trim() || 'Anonymous';
-            localStorage.setItem('chat_username', username);
-        });
+        // Initialize Speech Recognition
+        function initSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                console.warn('Speech Recognition not supported in this browser');
+                micButton.style.display = 'none';
+                return;
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.lang = 'en-US';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+
+            recognition.onstart = () => {
+                isListening = true;
+                micButton.classList.add('listening');
+                console.log('Speech recognition started');
+            };
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                console.log('Recognized:', transcript);
+                messageInput.value = transcript;
+                speechRetryCount = 0; // Reset retry count on success
+                // Auto-submit the message
+                setTimeout(() => {
+                    sendMessage();
+                }, 100);
+            };
+
+            recognition.onerror = (event) => {
+                // Use warn for expected errors, error for unexpected ones
+                if (event.error === 'network' || event.error === 'aborted') {
+                    console.warn('Speech recognition:', event.error);
+                } else {
+                    console.error('Speech recognition error:', event.error);
+                }
+                
+                isListening = false;
+                micButton.classList.remove('listening');
+                
+                if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+                    speechRetryCount = 0;
+                    showError('🚫 Microphone access denied. Please enable microphone permissions in your browser settings.');
+                } else if (event.error === 'no-speech') {
+                    speechRetryCount = 0;
+                    showError('🔇 No speech detected. Please try again.');
+                } else if (event.error === 'network') {
+                    // Network errors are common - Google's speech servers may be unreachable
+                    speechRetryCount++;
+                    if (speechRetryCount <= MAX_SPEECH_RETRIES) {
+                        // Silent retry - don't show error on first attempts
+                        if (speechRetryCount > 1) {
+                            showError(`🌐 Connecting to speech service... (attempt ${speechRetryCount}/${MAX_SPEECH_RETRIES})`);
+                        }
+                        setTimeout(() => {
+                            if (recognition && navigator.onLine) {
+                                try {
+                                    recognition.start();
+                                } catch (e) {
+                                    // Already started or other issue - stop retrying
+                                    speechRetryCount = 0;
+                                }
+                            } else {
+                                speechRetryCount = 0;
+                            }
+                        }, 1500 * speechRetryCount); // Exponential backoff
+                    } else {
+                        speechRetryCount = 0;
+                        showError('🌐 Speech recognition unavailable. This may be due to network restrictions or firewall settings. Try typing your message instead.');
+                    }
+                } else if (event.error === 'aborted') {
+                    // Silent - user manually stopped or system interrupted
+                    speechRetryCount = 0;
+                } else if (event.error === 'audio-capture') {
+                    speechRetryCount = 0;
+                    showError('🎤 Microphone error: Unable to capture audio. Please check your microphone.');
+                } else if (event.error === 'service-not-allowed') {
+                    speechRetryCount = 0;
+                    showError('🚫 Speech recognition service is not allowed. Please enable it in browser settings.');
+                } else {
+                    speechRetryCount = 0;
+                    showError(`⚠️ Speech recognition error: ${event.error}. Please try again.`);
+                }
+            };
+
+            recognition.onend = () => {
+                isListening = false;
+                micButton.classList.remove('listening');
+                // Only log if not during retry
+                if (speechRetryCount === 0) {
+                    console.log('Speech recognition ended');
+                }
+            };
+        }
+        initSpeechRecognition();
 
         // Connect to WebSocket
         function connect() {
-            const wsUrl = `${WS_PROTOCOL}//${WS_HOST}/api/chat?username=${encodeURIComponent(username || 'Anonymous')}`;
+            // Include room ID for session isolation (no username needed)
+            const wsUrl = `${WS_PROTOCOL}//${WS_HOST}/api/chat?room=${encodeURIComponent(roomId)}`;
+            
+            console.log(`Connecting to room: ${roomId.substring(0, 8)}...`);
             
             try {
                 ws = new WebSocket(wsUrl);
@@ -424,6 +723,7 @@
                     messageInput.disabled = false;
                     sendButton.disabled = false;
                     clearButton.disabled = false;
+                    if (recognition) micButton.disabled = false;
                     reconnectAttempts = 0;
                     hideError();
                 };
@@ -444,6 +744,12 @@
                     messageInput.disabled = true;
                     sendButton.disabled = true;
                     clearButton.disabled = true;
+                    micButton.disabled = true;
+
+                    // Stop any ongoing speech recognition
+                    if (recognition && isListening) {
+                        recognition.stop();
+                    }
 
                     // Attempt to reconnect
                     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
@@ -513,8 +819,61 @@
                     showError(data.message);
                     break;
 
+                case 'system_message':
+                    // System notification (e.g., RAG failures)
+                    displaySystemNotification(data.message);
+                    break;
+
+                case 'cleanup_progress':
+                    // Cleanup progress update
+                    updateCleanupProgress(data.status, data.progress, data.message);
+                    break;
+
                 default:
                     console.log('Unknown message type:', data.type);
+            }
+        }
+
+        // Update cleanup progress modal
+        function updateCleanupProgress(status, progress, message) {
+            cleanupProgressFill.style.width = progress + '%';
+            cleanupStatus.textContent = progress + '%';
+            cleanupMessage.textContent = message;
+
+            switch (status) {
+                case 'starting':
+                    cleanupOverlay.classList.add('show');
+                    clearButton.classList.add('clearing');
+                    clearButton.disabled = true;
+                    cleanupIcon.textContent = '🔄';
+                    cleanupTitle.textContent = 'Clearing Chat History';
+                    break;
+                case 'collecting':
+                    cleanupIcon.textContent = '🔍';
+                    cleanupTitle.textContent = 'Finding Data';
+                    break;
+                case 'deleting':
+                    cleanupIcon.textContent = '🗑️';
+                    cleanupTitle.textContent = 'Deleting Vectors';
+                    break;
+                case 'waiting':
+                    cleanupIcon.textContent = '⏳';
+                    cleanupTitle.textContent = 'Syncing';
+                    break;
+                case 'verifying':
+                    cleanupIcon.textContent = '✅';
+                    cleanupTitle.textContent = 'Verifying';
+                    break;
+                case 'complete':
+                    cleanupIcon.textContent = '🎉';
+                    cleanupTitle.textContent = 'Complete!';
+                    // Auto-hide after 1.5 seconds
+                    setTimeout(() => {
+                        cleanupOverlay.classList.remove('show');
+                        clearButton.classList.remove('clearing');
+                        clearButton.disabled = false;
+                    }, 1500);
+                    break;
             }
         }
 
@@ -593,8 +952,63 @@
         function completeAIMessage(messageId) {
             const aiMsg = aiMessages.get(messageId);
             if (aiMsg) {
+                // Speak the AI response if TTS is enabled
+                if (ttsEnabled && aiMsg.content) {
+                    speakText(aiMsg.content);
+                }
                 aiMessages.delete(messageId);
             }
+        }
+
+        // Text-to-Speech function
+        function speakText(text) {
+            if (!window.speechSynthesis) {
+                console.warn('Text-to-Speech not supported in this browser');
+                return;
+            }
+
+            // Cancel any ongoing speech
+            window.speechSynthesis.cancel();
+
+            // Remove markdown formatting for better speech
+            const cleanText = text
+                .replace(/```[\s\S]*?```/g, 'code block')
+                .replace(/`([^`]+)`/g, '$1')
+                .replace(/\*\*([^*]+)\*\*/g, '$1')
+                .replace(/\*([^*]+)\*/g, '$1')
+                .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+                .replace(/#{1,6}\s+/g, '')
+                .replace(/\n+/g, '. ');
+
+            const utterance = new SpeechSynthesisUtterance(cleanText);
+            utterance.lang = 'en-US';
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            utterance.volume = 1.0;
+
+            // Try to select a natural-sounding English voice
+            const voices = window.speechSynthesis.getVoices();
+            const preferredVoices = voices.filter(voice => 
+                voice.lang.startsWith('en') && 
+                (voice.name.includes('Natural') || 
+                 voice.name.includes('Premium') || 
+                 voice.name.includes('Enhanced') ||
+                 voice.name.includes('Google') ||
+                 voice.name.includes('Microsoft'))
+            );
+            
+            if (preferredVoices.length > 0) {
+                utterance.voice = preferredVoices[0];
+            } else if (voices.length > 0) {
+                const englishVoice = voices.find(voice => voice.lang.startsWith('en'));
+                if (englishVoice) utterance.voice = englishVoice;
+            }
+
+            utterance.onerror = (event) => {
+                console.error('Speech synthesis error:', event);
+            };
+
+            window.speechSynthesis.speak(utterance);
         }
 
         // Display AI error
@@ -623,6 +1037,21 @@
             scrollToBottom();
         }
 
+        // Display system notification
+        function displaySystemNotification(message) {
+            const notifDiv = document.createElement('div');
+            notifDiv.className = 'message system';
+            notifDiv.innerHTML = `
+                <div class="message-header">
+                    <span class="username system">System</span>
+                    <span class="timestamp">${new Date().toLocaleTimeString()}</span>
+                </div>
+                <div class="message-content">${escapeHtml(message)}</div>
+            `;
+            messagesContainer.appendChild(notifDiv);
+            scrollToBottom();
+        }
+
         // Send message
         function sendMessage() {
             const content = messageInput.value.trim();
@@ -637,7 +1066,17 @@
         function clearChat() {
             if (!ws || ws.readyState !== WebSocket.OPEN) return;
             
-            if (confirm('Are you sure you want to clear the chat history? This will delete all messages for everyone.')) {
+            if (confirm('Are you sure you want to clear all chat history? This will delete all messages and AI context.')) {
+                // Show loading immediately
+                cleanupOverlay.classList.add('show');
+                clearButton.classList.add('clearing');
+                clearButton.disabled = true;
+                cleanupIcon.textContent = '🔄';
+                cleanupTitle.textContent = 'Clearing Chat History';
+                cleanupMessage.textContent = 'Please wait...';
+                cleanupProgressFill.style.width = '0%';
+                cleanupStatus.textContent = '0%';
+                
                 ws.send(JSON.stringify({ type: 'clear_history' }));
             }
         }
@@ -677,6 +1116,78 @@
         clearButton.addEventListener('click', clearChat);
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendMessage();
+        });
+
+        // TTS toggle event listener
+        ttsToggle.addEventListener('click', () => {
+            ttsEnabled = !ttsEnabled;
+            localStorage.setItem('tts_enabled', ttsEnabled.toString());
+            updateTTSUI();
+            
+            // Cancel any ongoing speech when disabling
+            if (!ttsEnabled && window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+        });
+
+        // Microphone button event listener
+        micButton.addEventListener('click', () => {
+            if (!recognition) {
+                showError('Speech recognition is not supported in your browser.');
+                return;
+            }
+
+            // Check if online
+            if (!navigator.onLine) {
+                showError('🌐 You are offline. Speech recognition requires an internet connection.');
+                return;
+            }
+
+            if (isListening) {
+                recognition.stop();
+                speechRetryCount = 0; // Reset retry count
+            } else {
+                speechRetryCount = 0; // Reset retry count on manual start
+                try {
+                    recognition.start();
+                } catch (error) {
+                    console.error('Error starting speech recognition:', error);
+                    // Check if already started
+                    if (error.message && error.message.includes('started')) {
+                        showError('Speech recognition is already active. Please wait.');
+                    } else {
+                        showError('Failed to start microphone. Please try again.');
+                    }
+                }
+            }
+        });
+
+        // Load voices for TTS (they load asynchronously)
+        if (window.speechSynthesis) {
+            window.speechSynthesis.onvoiceschanged = () => {
+                const voices = window.speechSynthesis.getVoices();
+                console.log(`Loaded ${voices.length} TTS voices`);
+            };
+        }
+
+        // Handle online/offline events for speech recognition
+        window.addEventListener('online', () => {
+            console.log('Network connection restored');
+            if (recognition && ws && ws.readyState === WebSocket.OPEN) {
+                micButton.disabled = false;
+                micButton.title = 'Voice Input';
+            }
+        });
+
+        window.addEventListener('offline', () => {
+            console.log('Network connection lost');
+            if (recognition) {
+                micButton.disabled = true;
+                micButton.title = 'Voice Input (Offline - requires internet)';
+                if (isListening) {
+                    recognition.stop();
+                }
+            }
         });
 
         // Initialize connection
