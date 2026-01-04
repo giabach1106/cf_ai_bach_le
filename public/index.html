@@ -498,6 +498,11 @@
                     displayAIError(data.messageId, data.message);
                     break;
 
+                case 'rag_debug':
+                    // RAG debug info
+                    displayDebugInfo(data.info);
+                    break;
+
                 case 'history_cleared':
                     // History was cleared
                     clearMessagesUI();
@@ -602,6 +607,20 @@
             } else {
                 showError(errorMsg);
             }
+        }
+
+        // Display RAG debug info
+        function displayDebugInfo(info) {
+            const debugDiv = document.createElement('div');
+            debugDiv.className = 'message system';
+            debugDiv.innerHTML = `
+                <div class="message-header">
+                    <span class="username system">🔧 RAG Debug</span>
+                </div>
+                <div class="message-content" style="font-family: monospace; font-size: 0.9em; background: #f5f5f5; padding: 8px; border-radius: 4px; white-space: pre-wrap;">${escapeHtml(info)}</div>
+            `;
+            messagesContainer.appendChild(debugDiv);
+            scrollToBottom();
         }
 
         // Send message
