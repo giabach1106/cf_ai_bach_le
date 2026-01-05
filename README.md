@@ -1,459 +1,423 @@
-# ⚡ EdgeMind: Cloudflare AI Research Agent
+# EdgeMind: Real-Time AI Chat with RAG on Cloudflare's Edge
 
-EdgeMind is a serverless, real-time AI chat application built on the **Cloudflare Developer Platform**. It demonstrates the power of Edge Computing by combining **Durable Objects** for stateful consistency, **Workers AI (Llama 3.3)** for low-latency intelligence, and **Vectorize** for RAG-powered contextual memory.
+A serverless AI chat application built entirely on the Cloudflare Developer Platform, demonstrating production-grade integration of **Workers**, **Durable Objects**, **Workers AI**, and **Vectorize**. Each user session operates in complete isolation with its own persistent state, conversation history, and semantic memory powered by RAG (Retrieval Augmented Generation).
 
-## 🚀 Key Features
+**Live Demo:** [https://main.giabachand.workers.dev](https://main.giabachand.workers.dev)
 
-* **🧠 Edge Intelligence:** Powered by **Llama 3.3 (FP8)** running directly on Cloudflare Workers AI.
-* **🔍 RAG Memory System:** Uses **Cloudflare Vectorize** and embeddings (@cf/baai/bge-base-en-v1.5) to give the AI long-term contextual memory.
-* **📦 GitHub Repository Analysis:** Analyze any GitHub repo with `/analyze` command - generates AI summaries with **interactive Mind Map** visualizations.
-* **📊 Mermaid Diagrams:** Full support for Mermaid diagrams with **fullscreen zoom**, pan, and **PNG download** capabilities.
-* **⚡ Real-time Streaming:** Zero-latency token streaming directly to WebSocket clients.
-* **💾 Stateful Architecture:** Uses **Durable Objects** to maintain chat history and state consistency across global edge locations.
-* **🎨 Modern UI:** A responsive, glassmorphism-inspired interface with Markdown rendering and auto-scroll.
-* **🗑️ Clear Chat:** Ability to clear chat history for all users with one click (also clears vector embeddings).
-* **🔄 Auto-reconnect:** Automatic reconnection handling with up to 5 retry attempts.
+![EdgeMind Demo](./pics/demo.png)
 
-## 🛠️ Tech Stack
+---
 
-* **Runtime:** Cloudflare Workers
-* **Framework:** Hono (TypeScript)
-* **State:** Cloudflare Durable Objects
-* **AI Inference:** Workers AI (@cf/meta/llama-3.3-70b-instruct-fp8-fast)
-* **Embeddings:** Workers AI (@cf/baai/bge-base-en-v1.5)
-* **Vector Database:** Cloudflare Vectorize
-* **Frontend:** HTML5, CSS3, Vanilla JS (served via Workers Assets)
+## Table of Contents
 
-## 🏃‍♂️ How to Run
+- [Why This Matters](#why-this-matters)
+- [Technical Architecture](#technical-architecture)
+- [Core Implementation Details](#core-implementation-details)
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Getting Started](#getting-started)
+- [Usage Guide](#usage-guide)
+- [Development Notes](#development-notes)
+- [Acknowledgments](#acknowledgments)
 
-1.  **Clone the repository**
-    ```bash
-    git clone https://github.com/giabach1106/cf_ai_bach_le.git
-    cd cd_ai_bach_le
-    ```
+---
 
-2.  **Install dependencies**
-    ```bash
-    npm install
-    ```
+## Why This Matters
 
-3.  **Create Vectorize Index** (Required for RAG)
-    ```bash
-    npx wrangler vectorize create chat-index --dimensions=768 --metric=cosine
-    ```
+Traditional AI chat applications struggle with three fundamental problems:
 
-4.  **Start Development Server**
-    ```bash
-    npm run dev
-    ```
-    Visit `http://localhost:8787` to start chatting.
-    
-    **Note:** For RAG features to work, you need to run in remote mode since Vectorize requires remote resources:
-    ```bash
-    npm run dev  # Will use remote bindings automatically
-    ```
+1. **Statelessness** — HTTP Workers lose context between requests
+2. **Cold Memory** — LLMs have no recall of previous conversations
+3. **Global Consistency** — Maintaining session state across edge locations
 
-## 📖 How to Use
+EdgeMind solves all three by leveraging Cloudflare's primitives:
 
-### Chat with Other Users
-1. Enter your username in the left input field
-2. Type your message in the main input field
-3. Press **Enter** or click **Send**
-4. Your messages will be broadcast to all connected users
+| Problem | Solution | Implementation |
+|---------|----------|----------------|
+| Statelessness | Durable Objects | `ChatRoom` class with `this.ctx.storage` persists JSON message history |
+| Cold Memory | Vectorize + BGE Embeddings | 768D vectors stored per-message, queried with cosine similarity |
+| Global Consistency | DO's single-threaded guarantee | `idFromName('room-{uuid}')` routes all requests to the same instance |
 
-### Ask the AI Assistant (with RAG Memory)
-1. Start your message with `@ai` followed by your question
-2. Example: `@ai What is Cloudflare Workers?`
-3. The AI will respond with streaming text in real-time
-4. **RAG Features:**
-   - The AI automatically remembers previous conversations
-   - Messages are converted to embeddings and stored in Vectorize
-   - When you ask a question, the system retrieves the 5 most similar past messages
-   - The AI uses this context to provide more relevant and personalized answers
-5. AI responses support **Markdown formatting** including:
-   - Code blocks with syntax highlighting
-   - Bold, italic, lists
-   - Links and more
+The result is an AI assistant that remembers what you told it yesterday, responds in under 200ms from the nearest edge location, and maintains perfect session isolation between users.
 
-**Example RAG Workflow:**
+---
+
+## Technical Architecture
+
+### System Overview
+
+![Architecture](./pics/pic2.png)
+
+The architecture follows a clear separation:
+
 ```
-User: @ai My name is Bach, I like coffee
-AI: Nice to meet you, Bach! Coffee is great.
-
-[Later in conversation]
-
-User: @ai What do I like to drink?
-AI: You like coffee! [AI remembers from context]
+Browser (public/index.html)
+    │
+    ├─► WebSocket upgrade to /api/chat?room={uuid}
+    │
+    ▼
+Edge Worker (src/index.ts) ─── Hono router
+    │
+    ├─► env.CHAT_ROOM.idFromName('room-{uuid}')
+    │
+    ▼
+Durable Object (src/ChatRoom.ts)
+    │
+    ├─► this.ctx.storage  ─────► Message History (JSON array, capped at 100)
+    ├─► this.env.AI       ─────► Llama 3.3 70B + BGE Embeddings
+    └─► this.env.VECTORIZE ────► 768D vectors with roomId filter
 ```
 
-### 📦 Analyze GitHub Repositories (NEW!)
-Analyze any GitHub repository and get an AI-generated summary with an interactive Mind Map visualization!
+### Storage Layer
 
-1. Use the `/analyze` command followed by a GitHub URL
-2. Example: `/analyze https://github.com/AsyncFuncAI/deepwiki-open`
-3. The AI will:
-   - Fetch the README from GitHub API
-   - Generate a **Mermaid Mind Map** showing project structure
-   - Provide a comprehensive summary with features, tech stack, and more
+![Storage and AI Services](./pics/pic4.png)
 
-**Supported URL formats:**
-```
-/analyze https://github.com/owner/repo
-/analyze github.com/owner/repo
-/analyze https://github.com/owner/repo.git
-```
+**Durable Object Storage:**
+- `message_history` — JSON array of `ChatMessage[]` objects
+- `all_vector_ids` — Tracks inserted vector IDs for cleanup
 
-**Example Output:**
-```
-📦 Repository Analysis: owner/repo
-
-[Interactive Mind Map Diagram]
-   ┌─────────────┐
-   │  Project    │
-   │   Name      │
-   └──────┬──────┘
-          │
-    ┌─────┴─────┬─────────┬──────────┐
-    ▼           ▼         ▼          ▼
- Features   Tech Stack  Setup    Notable
-    │           │         │          │
-   ...         ...       ...        ...
-
-🎯 Project Overview
-Brief description of the project...
-
-✨ Key Features
-• Feature 1: Description
-• Feature 2: Description
-
-🛠️ Tech Stack
-Languages, frameworks, tools...
-
-🚀 Getting Started
-Installation and usage...
-```
-
-### 🔍 Diagram Zoom & Export
-All Mermaid diagrams support interactive features:
-
-1. **Hover** over any diagram to reveal the zoom button (🔍)
-2. **Click** the zoom button to open fullscreen modal
-3. **Keyboard shortcuts** in fullscreen:
-   - `+` / `=` : Zoom in
-   - `-` : Zoom out
-   - `0` : Reset zoom
-   - `Esc` : Close modal
-4. **Download** diagrams as high-resolution PNG images
-
-### Clear Chat History
-1. Click the **🗑️ Clear Chat** button in the header
-2. Confirm the action
-3. All messages will be deleted for all users
-4. All vector embeddings will be **completely removed** from Vectorize (including old untracked vectors)
-5. A system notification will announce the action
-
-**How Complete Cleanup Works:**
-- Queries Vectorize with a zero vector to find ALL existing vectors
-- Deletes all discovered vector IDs
-- Verifies deletion with a follow-up query
-- Logs remaining vectors if any are found
-- This ensures no "ghost" vectors remain from previous sessions
-
-### Change Your Username
-1. Simply type a new name in the left username input field
-2. Your next message will automatically use the new name
-3. No reconnection required - changes apply immediately
-4. Username is saved in localStorage for future sessions
-
-## 🔧 Recent Updates
-
-### 📦 GitHub Repository Analysis (Latest)
-- ✅ **`/analyze` Command:** Analyze any GitHub repository with a single command
-- ✅ **AI Summarization:** Llama 3.3 generates comprehensive summaries from README files
-- ✅ **Mind Map Generation:** Automatic Mermaid mind map diagrams for visual project overview
-- ✅ **Interactive Diagrams:** Click-to-zoom, keyboard controls, and PNG export
-- ✅ **Error Handling:** Graceful handling of invalid URLs, missing READMEs, and rate limits
-
-### 🎯 Production-Ready Fixes
-- ✅ **Complete Vector Cleanup:** Query-all-then-delete approach ensures ALL vectors are removed
-- ✅ **Real-time Username Updates:** Username changes apply immediately without reconnection
-- ✅ **Session Isolation:** Per-user isolated chat rooms with unique room IDs
-- ✅ **Verification System:** Post-deletion verification to confirm complete cleanup
-- ✅ **Improved Logging:** Enhanced debug output for troubleshooting
-
-### ✨ RAG Implementation
-- ✅ Integrated Cloudflare Vectorize for semantic search
-- ✅ Automatic embedding generation for all user messages
-- ✅ Context retrieval using cosine similarity
-- ✅ Enhanced AI responses with relevant conversation history
-- ✅ Non-blocking embedding storage for better performance
-- ✅ Vector cleanup when clearing chat history
-
-### Fixed AI Streaming Issues
-- ✅ Fixed incomplete AI responses (was only showing partial text)
-- ✅ Properly parse Workers AI streaming format using async iteration
-- ✅ Removed incorrect SSE parsing that caused truncated responses
-
-### Added Clear Chat Feature
-- ✅ Added clear history command handler in Durable Object
-- ✅ Added clear button in UI header
-- ✅ Broadcasts clear notification to all connected users
-- ✅ Includes confirmation dialog to prevent accidental deletion
-
-## 📊 Architecture
+**Vectorize Index:**
+- Index name: `chat-index`
+- Dimensions: 768 (BGE-base-en-v1.5 output)
+- Metric: Cosine similarity
+- Metadata: `{content, roomId, timestamp, messageId}`
 
 ### Session Isolation Model
 
-**Current Implementation: Per-User Isolated Chat Rooms**
-
-Each browser session gets a unique room ID, creating isolated chat experiences:
-
-```
-User A (Browser 1)
-  ↓
-  Generates: room-abc123
-  ↓
-  Durable Object Instance #1
-  ↓
-  Isolated message history & vectors
-
-User B (Browser 2)
-  ↓
-  Generates: room-xyz789
-  ↓
-  Durable Object Instance #2
-  ↓
-  Separate isolated history & vectors
-```
-
-**How It Works:**
-1. On first visit, client generates a unique `roomId` using `crypto.randomUUID()`
-2. `roomId` is stored in `localStorage` for persistence across page refreshes
-3. WebSocket connects to `/api/chat?room={roomId}`
-4. Server creates Durable Object with `idFromName('room-{roomId}')`
-5. Each unique room ID = separate DO instance = isolated chat environment
-
-**Switching to Shared Global Chat:**
-
-To enable a shared chat room for all users, modify `public/index.html`:
+Each browser generates a UUID on first visit, stored in `localStorage`:
 
 ```javascript
-// Comment out these lines (around line 480):
-// if (!roomId) {
-//     roomId = crypto.randomUUID();
-//     localStorage.setItem('chat_room_id', roomId);
-// }
-
-// And set:
-roomId = 'default'; // All users share the same room
+let roomId = localStorage.getItem('chat_room_id');
+if (!roomId) {
+    roomId = crypto.randomUUID();
+    localStorage.setItem('chat_room_id', roomId);
+}
 ```
 
-**Advantages of Current Model:**
-- ✅ Each user has private AI assistant with isolated RAG context
-- ✅ No cross-user data leakage
-- ✅ Scalable: DOs distributed across edge network
-- ✅ Perfect for personal AI assistant use case
+This UUID routes to a unique Durable Object instance. Different users never share state, vectors, or history. The isolation is enforced at three levels:
 
-**When to Use Shared Model:**
-- Public chat rooms
-- Community discussions
-- Collaborative AI interactions
+1. **DO Instance** — `idFromName()` creates separate instances per room
+2. **Vector Filter** — All Vectorize queries include `filter: {roomId}`
+3. **Vector ID Namespace** — IDs use pattern `room-{uuid}_{messageId}`
 
-### RAG Pipeline
-```
-User Message
-    ↓
-Generate Embedding (BGE-base-en-v1.5)
-    ↓
-Store in Vectorize (background, non-blocking)
-    ↓
-User asks @ai question
-    ↓
-Generate Query Embedding
-    ↓
-Query Vectorize (top 5 similar messages, cosine similarity)
-    ↓
-Inject context into LLM prompt
-    ↓
-Llama 3.3 generates contextual response
-    ↓
-Stream response to user
+---
+
+## Core Implementation Details
+
+### Dual-Context RAG Pipeline
+
+![RAG Sequence](./pics/pic7.png)
+
+When a user sends an `@ai` query, the system performs parallel context retrieval:
+
+**1. Temporal Context (Recent Messages)**
+```typescript
+const recentMessages = await this.getRecentMessages(10);
 ```
 
-### Configuration
-- **Embedding Model:** `@cf/baai/bge-base-en-v1.5` (768 dimensions)
-- **Vector Index:** `chat-index` (cosine metric)
-- **Context Retrieval:** Top 5 matches with similarity score > 0.5
-- **LLM Model:** `@cf/meta/llama-3.3-70b-instruct-fp8-fast`
-
-## 🐛 Debugging
-
-### Enable RAG Debug Messages
-To see detailed RAG operation logs in the chat UI:
-
-1. Open `src/ChatRoom.ts`
-2. Find line ~339 (look for `ENABLE_RAG_DEBUG`)
-3. Ensure it's set to `true` (default: enabled)
-4. Restart the dev server
-
-You'll see messages like:
-- 🔍 Generating embedding...
-- 🔎 Querying Vectorize...
-- 📝 Match results with similarity scores
-- ✅ Context usage confirmation
-
-### Verify Complete Vector Cleanup
-
-After clicking "Clear Chat", check the browser console for:
-
-```
-[RAG] Querying Vectorize to find all vectors...
-[RAG] Found X vectors in Vectorize
-[RAG] Deleting X vectors from Vectorize...
-[RAG] ✓ Successfully deleted X vectors
-[RAG] ✓ Verified: All vectors successfully deleted
+**2. Semantic Context (Vectorize Query)**
+```typescript
+const queryEmbedding = await this.generateEmbedding(userQuery);
+const matches = await this.env.VECTORIZE.query(queryEmbedding, {
+    topK: 5,
+    filter: { roomId: this.roomId },
+    returnMetadata: true
+});
+// Filter matches with score > 0.5
 ```
 
-If vectors remain, you'll see:
+**3. Context Injection**
+```typescript
+const systemPrompt = `You are a helpful AI assistant.
+Current date: ${new Date().toISOString()}
+
+Recent conversation:
+${recentMessages.map(m => `${m.role}: ${m.content}`).join('\n')}
+
+Relevant past context:
+${semanticMatches.map(m => `- ${m.metadata.content}`).join('\n')}
+`;
 ```
-[RAG] ⚠️ Warning: N vectors still remain after deletion
+
+**4. Streaming Response**
+```typescript
+const stream = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+    messages: [{ role: 'system', content: systemPrompt }, ...history],
+    stream: true,
+    max_tokens: 1000
+});
+
+for await (const chunk of stream) {
+    this.broadcastMessage({ type: 'ai_stream', messageId, chunk: chunk.response });
+}
 ```
 
-### Check Your Room ID
+### Embedding Storage (Fire-and-Forget)
 
-To see your current isolated room ID, open browser console:
-```javascript
-localStorage.getItem('chat_room_id')
-// Returns: "abc123..." (your unique room ID)
+User messages are embedded asynchronously to avoid blocking the response:
+
+```typescript
+// Non-blocking: don't await
+this.storeMessageEmbedding(message.id, message.content, this.roomId);
+
+async storeMessageEmbedding(messageId: string, content: string, roomId: string) {
+    const embedding = await this.generateEmbedding(content);
+    const vectorId = `${roomId}_${messageId}`;
+    
+    await this.env.VECTORIZE.upsert([{
+        id: vectorId,
+        values: embedding,
+        metadata: { content, roomId, timestamp: Date.now(), messageId }
+    }]);
+    
+    // Track for cleanup
+    const trackedIds = await this.ctx.storage.get('all_vector_ids') || [];
+    await this.ctx.storage.put('all_vector_ids', [...trackedIds, vectorId]);
+}
 ```
 
-## 🚀 Deployment to Production
+### Complete Vector Cleanup
 
-### Bước 1: Đăng nhập Cloudflare
+The clear history function uses a query-all-then-delete approach since Vectorize doesn't support `deleteAll()`:
+
+```typescript
+async clearHistory() {
+    // Stage 1: Query with zero vector to find all vectors in this room
+    const zeroVector = new Array(768).fill(0);
+    const allVectors = await this.env.VECTORIZE.query(zeroVector, {
+        topK: 10000,
+        filter: { roomId: this.roomId }
+    });
+    
+    // Stage 2: Delete discovered vectors
+    if (allVectors.matches.length > 0) {
+        await this.env.VECTORIZE.deleteByIds(
+            allVectors.matches.map(m => m.id)
+        );
+    }
+    
+    // Stage 3: Verify deletion
+    const remaining = await this.env.VECTORIZE.query(zeroVector, {
+        topK: 10,
+        filter: { roomId: this.roomId }
+    });
+    
+    if (remaining.matches.length > 0) {
+        console.warn(`[RAG] ${remaining.matches.length} vectors still remain`);
+    }
+    
+    // Stage 4: Clear DO storage
+    await this.ctx.storage.delete('message_history');
+    await this.ctx.storage.delete('all_vector_ids');
+}
+```
+
+---
+
+## Features
+
+### AI Chat with Memory
+
+Start any message with `@ai` to query the assistant:
+
+```
+@ai What is Cloudflare Workers?
+@ai Explain the previous concept in more detail
+@ai What did I ask you about yesterday?
+```
+
+The RAG system retrieves semantically similar past messages, giving the AI contextual awareness across sessions.
+
+### GitHub Repository Analysis
+
+![Mind Map Feature](./pics/pic1.png)
+
+Use the `/analyze` command to generate AI summaries with interactive mind maps:
+
+```
+/analyze https://github.com/cloudflare/workers-sdk
+/analyze github.com/vercel/next.js
+```
+
+The system:
+1. Fetches README via GitHub API (`Accept: application/vnd.github.raw+json`)
+2. Streams analysis through Llama 3.3 with a specialized summarizer prompt
+3. Generates Mermaid mind map diagrams
+4. Renders interactive diagrams with zoom, pan, and PNG export
+
+### Voice Interface
+
+- **Speech Recognition:** Browser-native `SpeechRecognition` API for voice input
+- **Text-to-Speech:** `SpeechSynthesis` API reads AI responses aloud
+- Toggle with the microphone button in the UI
+
+### Diagram Interactions
+
+All Mermaid diagrams support:
+- Hover to reveal zoom button
+- Fullscreen modal with keyboard shortcuts (`+`/`-` zoom, `0` reset, `Esc` close)
+- High-resolution PNG download
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| Runtime | Cloudflare Workers | V8 isolates, global edge deployment |
+| Routing | Hono 4.11.3 | Lightweight HTTP router with WebSocket support |
+| State | Durable Objects | Single-threaded, persistent actor model |
+| LLM | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Text generation, 1000 max tokens |
+| Embeddings | `@cf/baai/bge-base-en-v1.5` | 768D vectors for semantic search |
+| Vector DB | Cloudflare Vectorize | Cosine similarity search with metadata filtering |
+| Frontend | Vanilla JS + marked.js + mermaid.js | No build step, CDN-loaded libraries |
+
+### Cloudflare Bindings (wrangler.toml)
+
+```toml
+[[durable_objects.bindings]]
+name = "CHAT_ROOM"
+class_name = "ChatRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoom"]  # Free tier compatible
+
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "chat-index"
+
+[assets]
+directory = "./public/"
+binding = "ASSETS"
+```
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 18+
+- Cloudflare account (free tier works for most features)
+- Wrangler CLI (`npm install -g wrangler`)
+
+### Setup
 
 ```bash
+# Clone repository
+git clone https://github.com/giabach1106/cf_ai_bach_le.git
+cd cf_ai_bach_le
+
+# Install dependencies
+npm install
+
+# Login to Cloudflare
 npx wrangler login
-```
 
-Lệnh này sẽ mở browser để bạn đăng nhập vào Cloudflare account. Sau khi đăng nhập thành công, Wrangler sẽ lưu credentials.
-
-### Bước 2: Tạo Vectorize Index (Nếu chưa có)
-
-Vectorize index cần thiết cho tính năng RAG. Kiểm tra xem đã có chưa:
-
-```bash
-npx wrangler vectorize list
-```
-
-Nếu chưa có index `chat-index`, tạo mới:
-
-```bash
+# Create Vectorize index (required for RAG)
 npx wrangler vectorize create chat-index --dimensions=768 --metric=cosine
+
+# Start development server
+npm run dev
 ```
 
-**Lưu ý:** Vectorize hiện tại chỉ có sẵn trên **paid plans** (Workers Paid hoặc Enterprise). Nếu bạn dùng free plan, RAG sẽ không hoạt động nhưng các tính năng khác vẫn chạy bình thường.
+Open `http://localhost:8787` — the dev server connects to remote AI and Vectorize services.
 
-### Bước 3: Deploy Worker
+### Deploy to Production
 
 ```bash
 npm run deploy
 ```
 
-Hoặc:
+Your worker will be available at `https://{worker-name}.{subdomain}.workers.dev`.
+
+---
+
+## Usage Guide
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `@ai {question}` | Query the AI assistant with RAG context |
+| `/analyze {github-url}` | Generate repository summary with mind map |
+| Clear Chat button | Deletes all history and vectors for current room |
+
+### Session Management
+
+- **Private by default:** Each browser gets an isolated room
+- **Share a room:** Pass `?room={shared-id}` in URL
+- **Reset session:** Clear `localStorage` or use incognito mode
+
+### Debugging RAG
+
+Check browser console for detailed logs:
+
+```
+[RAG] Generating embedding for query...
+[RAG] Vectorize returned 5 matches
+[RAG] Match (score: 0.847): "User mentioned they work at..."
+[RAG] Injecting 3 relevant contexts into prompt
+```
+
+---
+
+## Development Notes
+
+### Project Structure
+
+```
+├── src/
+│   ├── index.ts        # Hono app, routes, DO instantiation
+│   └── ChatRoom.ts     # Durable Object: WebSocket, AI, RAG logic
+├── public/
+│   └── index.html      # ~900 lines vanilla JS frontend
+├── wrangler.toml       # Cloudflare bindings and config
+└── PROMPTS.md          # Engineering prompts used to build this
+```
+
+### How This Was Built
+
+This project was developed using an iterative **vibe-coding** approach with AI assistance. The complete engineering prompts and architectural decisions are documented in [`PROMPTS.md`](./PROMPTS.md).
+
+Key phases:
+1. **Configuration** — Wrangler bindings, Hono boilerplate
+2. **Durable Object** — WebSocket handling, message persistence
+3. **AI Streaming** — Workers AI integration, SSE parsing
+4. **RAG Pipeline** — Vectorize embeddings, context retrieval
+5. **GitHub Analysis** — API integration, Mermaid generation
+
+### Known Limitations
+
+- **Vector limit:** Cleanup queries cap at 10,000 vectors. Rooms with >10k messages may have orphaned vectors.
+- **Vectorize availability:** Requires Workers Paid plan. Free tier falls back to non-RAG responses.
+- **Username persistence:** Display names update immediately but old messages retain original names.
+
+### Type Generation
+
+After modifying `wrangler.toml`, regenerate TypeScript types:
 
 ```bash
-npx wrangler deploy
+npm run cf-typegen
 ```
 
-Quá trình deploy sẽ:
-- ✅ Build TypeScript code
-- ✅ Upload assets từ `public/` folder
-- ✅ Deploy Worker với tên `main` (có thể đổi trong `wrangler.toml`)
-- ✅ Tạo Durable Objects namespace
-- ✅ Bind Workers AI, Vectorize, và Assets
+This updates `worker-configuration.d.ts` with the `Env` interface.
 
-### Bước 4: Verify Deployment
+---
 
-Sau khi deploy thành công, bạn sẽ nhận được URL như:
-```
-https://main.your-subdomain.workers.dev
-```
+## Acknowledgments
 
-**Test các tính năng:**
-1. ✅ Mở URL trong browser
-2. ✅ Test chat với `@ai` command
-3. ✅ Test GitHub analysis với `/analyze https://github.com/owner/repo`
-4. ✅ Test Mind Map zoom và download
-5. ✅ Test clear chat để verify vector cleanup
+Built with Cloudflare's developer platform:
+- [Workers](https://developers.cloudflare.com/workers/)
+- [Durable Objects](https://developers.cloudflare.com/durable-objects/)
+- [Workers AI](https://developers.cloudflare.com/workers-ai/)
+- [Vectorize](https://developers.cloudflare.com/vectorize/)
 
-### Bước 5: Custom Domain (Optional)
+---
 
-Nếu muốn dùng custom domain:
-
-1. Thêm domain vào Cloudflare Dashboard
-2. Tạo CNAME record trỏ đến worker
-3. Hoặc dùng Cloudflare Workers Routes
-
-### Troubleshooting Deployment
-
-**Lỗi: "Vectorize index not found"**
-```bash
-# Tạo index nếu chưa có
-npx wrangler vectorize create chat-index --dimensions=768 --metric=cosine
-```
-
-**Lỗi: "Durable Objects migration failed"**
-- Đảm bảo `wrangler.toml` có đúng migrations config
-- Nếu đã deploy trước đó, có thể cần update migration tag
-
-**Lỗi: "Workers AI not available"**
-- Workers AI cần account có access (thường là paid plans)
-- Kiểm tra trong Cloudflare Dashboard → Workers → AI
-
-**Lỗi: "Assets binding failed"**
-- Đảm bảo folder `public/` tồn tại và có file `index.html`
-- Kiểm tra `wrangler.toml` có đúng `[assets]` config
-
-### Production Checklist
-
-Trước khi deploy production, đảm bảo:
-
-- [ ] ✅ Đã test tất cả features local (`npm run dev`)
-- [ ] ✅ Vectorize index đã được tạo
-- [ ] ✅ Workers AI binding hoạt động
-- [ ] ✅ Durable Objects migrations đúng
-- [ ] ✅ Assets folder có đầy đủ files
-- [ ] ✅ Environment variables (nếu có) đã set trong Cloudflare Dashboard
-
-### Update Deployment
-
-Khi có code mới, chỉ cần chạy lại:
-
-```bash
-npm run deploy
-```
-
-Wrangler sẽ tự động:
-- Detect changes
-- Build và upload code mới
-- Update worker không cần downtime
-
-## ⚠️ Important Notes
-
-### Vector Cleanup Limitations
-- Vectorize query has a max `topK` limit (~10,000 vectors)
-- If your room has >10,000 messages, some old vectors may remain
-- For production with high message volume, consider implementing pagination or periodic cleanup jobs
-
-### Username Updates
-- Username changes apply immediately for new messages
-- Old messages retain their original username (by design)
-- No retroactive username changes in history
-
-### Session Persistence
-- Room IDs are stored in `localStorage`
-- Clearing browser data = new isolated room created
-- To "reset" your chat: Clear `localStorage` or use incognito mode
-
-## 🤖 AI Assistance
-See [PROMPTS.md](./PROMPTS.md) for the detailed engineering logs and prompts used to architect this solution.
+**Author:** Bach Le  
+**License:** MIT
