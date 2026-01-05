@@ -8,8 +8,24 @@ A serverless AI chat application built entirely on the Cloudflare Developer Plat
 
 ---
 
+## How This Was Built
+
+This project was developed using an iterative **vibe-coding** approach with AI assistance. Rather than writing boilerplate from scratch, I used structured prompts to architect each component incrementally—from Wrangler configuration to Durable Object state machines to streaming AI responses.
+
+The complete engineering prompts and architectural decisions are documented in [`PROMPTS.md`](./PROMPTS.md).
+
+**Development phases:**
+1. **Configuration** — Wrangler bindings, Hono boilerplate, free-tier DO migrations
+2. **Durable Object** — WebSocket session management, `this.ctx.storage` persistence
+3. **AI Streaming** — Workers AI integration, async iteration over SSE chunks
+4. **RAG Pipeline** — Vectorize embeddings, dual-context retrieval, prompt injection
+5. **GitHub Analysis** — API integration, Mermaid mind map generation
+
+---
+
 ## Table of Contents
 
+- [How This Was Built](#how-this-was-built)
 - [Why This Matters](#why-this-matters)
 - [Technical Architecture](#technical-architecture)
 - [Core Implementation Details](#core-implementation-details)
@@ -379,17 +395,6 @@ Check browser console for detailed logs:
 ├── wrangler.toml       # Cloudflare bindings and config
 └── PROMPTS.md          # Engineering prompts used to build this
 ```
-
-### How This Was Built
-
-This project was developed using an iterative **vibe-coding** approach with AI assistance. The complete engineering prompts and architectural decisions are documented in [`PROMPTS.md`](./PROMPTS.md).
-
-Key phases:
-1. **Configuration** — Wrangler bindings, Hono boilerplate
-2. **Durable Object** — WebSocket handling, message persistence
-3. **AI Streaming** — Workers AI integration, SSE parsing
-4. **RAG Pipeline** — Vectorize embeddings, context retrieval
-5. **GitHub Analysis** — API integration, Mermaid generation
 
 ### Known Limitations
 
